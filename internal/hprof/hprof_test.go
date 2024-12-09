@@ -1,0 +1,5 @@
+package hprof
+
+import (
+	"testing"
+)
