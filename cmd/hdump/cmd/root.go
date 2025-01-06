@@ -45,22 +45,27 @@ func dumpFile(name string) error {
 	fmt.Println("started at", header.TimeStamp)
 
 	for {
-	        record, blob, err := hprof.ReadRecord(f, header)
-        	if err != nil {
-                	return err
-        	}
+		record, blob, err := hprof.ReadRecord(f, header)
+		if err != nil {
+			return err
+		}
 		switch record.Tag {
-		case hprof.Utf8: 
+		case hprof.Utf8:
 			utfRecord := &hprof.RecordUtf8{Record: record}
 			utfRecord.Init(blob)
 			fmt.Printf("utf8: %08X %s\n", utfRecord.Id, utfRecord.Value)
-                case hprof.LoadClass:
-                        lcRecord := &hprof.RecordLoadClass{Record: record}
-                        //utfRecord.Init(blob)
-			_ = lcRecord
-                        fmt.Printf("load class record\n")
-                }
-	}
+		case hprof.TagLoadClass:
+			lcRecord := &hprof.RecordLoadClass{Record: record}
+			err := lcRecord.Init(blob)
+			if err != nil {
+				fmt.Printf("Error initializing LoadClass record: %v\n", err)
+			}
+			fmt.Printf("Load Class Record:\n")
+			fmt.Printf("  ClassSerial: %08X\n", lcRecord.ClassSerial)
+			fmt.Printf("  ObjectId: %016X\n", lcRecord.ObjectId)
+			fmt.Printf("  StackTraceSerial: %08X\n", lcRecord.StackTraceSerial)
+			fmt.Printf("  NameId: %016X\n", lcRecord.NameId)
+		}
 
-	return nil
+	}
 }
