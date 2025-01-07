@@ -4,64 +4,40 @@ import (
 	"errors"
 	"io"
 	"os"
-	"sync"
 )
 
-var (
-	globalFile *os.File
-	fileMutex  sync.Mutex
-)
-
-func initGlobalFile(filePath string) error {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return err
-	}
-	globalFile = file
-	return nil
-}
-
-func closeGlobalFile() error {
-	if globalFile != nil {
-		return globalFile.Close()
-	}
-	return nil
-}
-
-func getFrameData(frameID int64) ([]byte, error) {
-	fileMutex.Lock()
-	defer fileMutex.Unlock()
-
-	if globalFile == nil {
-		return nil, errors.New("Global file is not opened")
+func GetFrameData(file *os.File, frameID int64) ([]byte, error) {
+	if file == nil {
+		return nil, errors.New("File is not opened")
 	}
 
-	var offset int64 = frameID * 64
-	_, err := globalFile.Seek(offset, io.SeekStart)
+	var frameSize int64 = 40
+	var offset int64 = frameID * frameSize
+	_, err := file.Seek(offset, io.SeekStart)
 	if err != nil {
 		return nil, err
 	}
 
-	// read data
+	// Read data
 	data := make([]byte, 64)
-	_, err = globalFile.Read(data)
+	_, err = file.Read(data)
 	if err != nil {
 		if err == io.EOF {
-			return nil, errors.New("Can't read data")
+			return nil, nil
 		}
 		return nil, err
 	}
 	return data, nil
 }
 
-func extractCallStackRecords() ([]StackTrace, []StackFrame, []RootJavaFrame, []RootJNILocal, error) {
+func ExtractCallStackRecords(file *os.File) ([]StackTrace, []StackFrame, []RootJavaFrame, []RootJNILocal, error) {
 	var stackTraces []StackTrace
 	var stackFrames []StackFrame
 	var rootJavaFrames []RootJavaFrame
 	var rootJNILocals []RootJNILocal
-	// read dump
+
 	for {
-		record, err := readRecord(globalFile)
+		record, err := readRecord(file)
 		if err == io.EOF {
 			break
 		}
@@ -69,7 +45,7 @@ func extractCallStackRecords() ([]StackTrace, []StackFrame, []RootJavaFrame, []R
 			return nil, nil, nil, nil, err
 		}
 
-		// stack trace
+		// Stack trace with tag 0x05
 		if record.Tag == 0x05 {
 			stackTrace, err := readStackTrace(record.Data)
 			if err != nil {
@@ -78,8 +54,7 @@ func extractCallStackRecords() ([]StackTrace, []StackFrame, []RootJavaFrame, []R
 			stackTraces = append(stackTraces, stackTrace)
 
 			for _, frameID := range stackTrace.FramesID {
-
-				frameData, err := getFrameData(frameID)
+				frameData, err := GetFrameData(file, frameID)
 				if err != nil {
 					return nil, nil, nil, nil, err
 				}
@@ -91,14 +66,14 @@ func extractCallStackRecords() ([]StackTrace, []StackFrame, []RootJavaFrame, []R
 			}
 		}
 
-		// need to check root
+		// Root frames check
 		if record.Tag == 0x02 {
 			rootJavaFrame, err := readRootJavaFrame(record.Data)
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
 			rootJavaFrames = append(rootJavaFrames, rootJavaFrame)
-		} else if record.Tag == 0x03 { // Тег для RootJNILocal
+		} else if record.Tag == 0x03 {
 			rootJNILocal, err := readRootJNILocal(record.Data)
 			if err != nil {
 				return nil, nil, nil, nil, err
