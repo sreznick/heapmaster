@@ -36,33 +36,69 @@ func dumpStack(name string) error {
 		return fmt.Errorf("Can't open file: %v", err)
 	}
 	defer f.Close()
+
 	header, err := hprof.ReadHeader(f)
 	if err != nil {
 		return fmt.Errorf("error reading header: %v", err)
 	}
 	fmt.Println("Started at:", header.TimeStamp)
-	stackTraces, stackFrames, rootJavaFrames, rootJNILocals, err := hprof.ExtractCallStackRecords(f)
+
+	stackTraces, stackFrames, rootJavaFrames, rootJNILocals, startThreads, err := hprof.ExtractCallStackRecords(f)
 	if err != nil {
 		return fmt.Errorf("error extracting call stack records: %v", err)
 	}
+
+	fmt.Println("\n--- Start Threads ---")
+	for _, startThread := range startThreads {
+		fmt.Printf(
+			"Thread Serial Number: %d, Object ID: %d, Stack Trace ID: %d, Thread Name ID: %d, Group Name ID: %d, Parent Group Name ID: %d\n",
+			startThread.ThreadSerialNumber,
+			startThread.ThreadObjectID,
+			startThread.StackTraceID,
+			startThread.ThreadNameID,
+			startThread.ThreadGroupNameID,
+			startThread.ParentGroupNameID,
+		)
+	}
+
 	fmt.Println("\n--- Stack Traces ---")
 	for _, stackTrace := range stackTraces {
-		fmt.Printf("StackTrace Serial: %08X, Thread: %08X, Number of Frames: %d\n", stackTrace.StackTraceSerialNumber, stackTrace.ThreadSerialNumber, stackTrace.NumberOfFrames)
+		fmt.Printf("StackTrace Serial: %d, Thread: %d, Number of Frames: %d\n", stackTrace.StackTraceSerialNumber, stackTrace.ThreadSerialNumber, stackTrace.NumberOfFrames)
 		for _, frameID := range stackTrace.FramesID {
-			fmt.Printf("  Frame ID: %08X\n", frameID)
+			fmt.Printf("  Frame ID: %d\n", frameID)
 		}
 	}
+
 	fmt.Println("\n--- Stack Frames ---")
 	for _, frame := range stackFrames {
-		fmt.Printf("Frame MethodID: %08X, MethodSignatureID: %08X\n", frame.MethodId, frame.MethodSignatureStringId)
+		fmt.Printf("Frame MethodID: %d, MethodSignatureID: %d\n", frame.MethodId, frame.MethodSignatureStringId)
 	}
+
+	threadStacks, err := hprof.BuildThreadStacks(stackTraces, stackFrames)
+	if err != nil {
+		return fmt.Errorf("error building thread stacks: %v", err)
+	}
+
+	fmt.Println("\n--- Thread Stacks ---")
+	for _, threadStack := range threadStacks {
+		fmt.Printf("Thread Serial Number: %d\n", threadStack.ThreadID)
+		if len(threadStack.StackFrames) == 0 {
+			fmt.Println("  No frames in this thread stack.")
+		} else {
+			for _, frame := range threadStack.StackFrames {
+				fmt.Printf("  Frame MethodID: %d, MethodSignatureID: %d\n", frame.MethodId, frame.MethodSignatureStringId)
+			}
+		}
+	}
+
 	fmt.Println("\n--- Root Java Frames ---")
 	for _, rootJavaFrame := range rootJavaFrames {
-		fmt.Printf("Root Java Frame ID: %08X\n", rootJavaFrame.FrameNumber)
+		fmt.Printf("Root Java Frame ID: %d\n", rootJavaFrame.FrameNumber)
 	}
+
 	fmt.Println("\n--- Root JNI Locals ---")
 	for _, rootJNILocal := range rootJNILocals {
-		fmt.Printf("Root JNI Local ID: %08X\n", rootJNILocal.FrameNumber)
+		fmt.Printf("Root JNI Local ID: %d\n", rootJNILocal.FrameNumber)
 	}
 
 	return nil
