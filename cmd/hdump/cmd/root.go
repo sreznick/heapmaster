@@ -34,10 +34,10 @@ func Execute() {
 func dumpFile(name string) error {
 	fmt.Println("dump", name)
 	f, err := os.Open(os.Args[1])
-	defer f.Close()
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 	header, err := hprof.ReadHeader(f)
 	if err != nil {
 		return err
@@ -50,16 +50,16 @@ func dumpFile(name string) error {
                 	return err
         	}
 		switch record.Tag {
-		case hprof.Utf8: 
+		case hprof.StringUtf8Tag: 
 			utfRecord := &hprof.RecordUtf8{Record: record}
 			utfRecord.Init(blob)
 			fmt.Printf("utf8: %08X %s\n", utfRecord.Id, utfRecord.Value)
-                case hprof.LoadClass:
-                        lcRecord := &hprof.RecordLoadClass{Record: record}
-                        //utfRecord.Init(blob)
+		case hprof.LoadClassTag:
+			lcRecord := &hprof.RecordLoadClass{Record: record}
+			//utfRecord.Init(blob)
 			_ = lcRecord
-                        fmt.Printf("load class record\n")
-                }
+			fmt.Printf("load class record\n")
+        }
 	}
 
 	return nil
