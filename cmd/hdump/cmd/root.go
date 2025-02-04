@@ -45,12 +45,12 @@ func dumpFile(name string) error {
 	fmt.Println("started at", header.TimeStamp)
 
 	for {
-	        record, blob, err := hprof.ReadRecord(f, header)
-        	if err != nil {
-                	return err
-        	}
+		record, blob, err := hprof.ReadRecord(f, header)
+		if err != nil {
+			return err
+		}
 		switch record.Tag {
-		case hprof.StringUtf8Tag: 
+		case hprof.StringUtf8Tag:
 			utfRecord := &hprof.RecordUtf8{Record: record}
 			utfRecord.Init(blob)
 			fmt.Printf("utf8: %08X %s\n", utfRecord.Id, utfRecord.Value)
@@ -59,7 +59,7 @@ func dumpFile(name string) error {
 			//utfRecord.Init(blob)
 			_ = lcRecord
 			fmt.Printf("load class record\n")
-        }
+		}
 	}
 
 	return nil
