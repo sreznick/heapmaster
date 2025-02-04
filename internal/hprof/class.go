@@ -45,6 +45,20 @@ const (
 	Long    BasicType = 11 //8 bytes
 )
 
+func (bt BasicType) GetSize() int32 {
+	switch bt {
+	case Boolean, Byte, Char:
+		return 1
+	case Short:
+		return 2
+	case Float, Int:
+		return 4
+	case Double, Long:
+		return 8
+	}
+	return -1
+}
+
 type ID int64 // depends on the identifier size, but we will use int64 for now
 
 // 0x01
@@ -294,6 +308,42 @@ type PrimitiveArrayDump struct {
 	Elements               []byte
 }
 
+func readID(reader *bytes.Reader) ID {
+	var id ID
+	binary.Read(reader, binary.BigEndian, &id)
+	return id
+}
+
+func readInt64(reader *bytes.Reader) int64 {
+	var i int64
+	binary.Read(reader, binary.BigEndian, &i)
+	return i
+}
+
+func readInt32(reader *bytes.Reader) int32 {
+	var i int32
+	binary.Read(reader, binary.BigEndian, &i)
+	return i
+}
+
+func readInt16(reader *bytes.Reader) int16 {
+	var i int16
+	binary.Read(reader, binary.BigEndian, &i)
+	return i
+}
+
+func readBasicType(reader *bytes.Reader) BasicType {
+	var bt BasicType
+	binary.Read(reader, binary.BigEndian, &bt)
+	return bt
+}
+
+func readArray(reader *bytes.Reader, size int32) []byte {
+	data := make([]byte, size)
+	reader.Read(data)
+	return data
+}
+
 func readHeader(file *os.File) HprofHeader {
 	header := HprofHeader{}
 
@@ -406,243 +456,181 @@ func readHeapDump(data []byte) HeapDump {
 	return heapDump
 }
 
-func readRootUnknown(data []byte) interface{} {
+func readRootUnknown(reader *bytes.Reader) interface{} {
 	return RootUnknown{
-		ObjectId: ID(binary.BigEndian.Uint64(data[:8])),
+		ObjectId: readID(reader),
 	}
 }
 
-func readRootJNIGlobal(data []byte) interface{} {
+func readRootJNIGlobal(reader *bytes.Reader) interface{} {
 	return RootJNIGlobal{
-		ObjectId: ID(binary.BigEndian.Uint64(data[:8])),
-		JNIRef:   ID(binary.BigEndian.Uint64(data[8:16])),
+		ObjectId: readID(reader),
+		JNIRef:   readID(reader),
 	}
 }
 
-func readRootJNILocal(data []byte) interface{} {
+func readRootJNILocal(reader *bytes.Reader) interface{} {
 	return RootJNILocal{
-		ObjectId:           ID(binary.BigEndian.Uint64(data[:8])),
-		ThreadSerialNumber: int32(binary.BigEndian.Uint32(data[8:12])),
-		FrameNumber:        int32(binary.BigEndian.Uint32(data[12:16])),
+		ObjectId:           readID(reader),
+		ThreadSerialNumber: readInt32(reader),
+		FrameNumber:        readInt32(reader),
 	}
 }
 
-func readRootJavaFrame(data []byte) interface{} {
+func readRootJavaFrame(reader *bytes.Reader) interface{} {
 	return RootJavaFrame{
-		ObjectId:           ID(binary.BigEndian.Uint64(data[:8])),
-		ThreadSerialNumber: int32(binary.BigEndian.Uint32(data[8:12])),
-		FrameNumber:        int32(binary.BigEndian.Uint32(data[12:16])),
+		ObjectId:           readID(reader),
+		ThreadSerialNumber: readInt32(reader),
+		FrameNumber:        readInt32(reader),
 	}
 }
 
-func readRootNativeStack(data []byte) interface{} {
+func readRootNativeStack(reader *bytes.Reader) interface{} {
 	return RootNativeStack{
-		ObjectId:           ID(binary.BigEndian.Uint64(data[:8])),
-		ThreadSerialNumber: int32(binary.BigEndian.Uint32(data[8:12])),
+		ObjectId:           readID(reader),
+		ThreadSerialNumber: readInt32(reader),
 	}
 }
 
-func readRootStickyClass(data []byte) interface{} {
+func readRootStickyClass(reader *bytes.Reader) interface{} {
 	return RootStickyClass{
-		ObjectId: ID(binary.BigEndian.Uint64(data[:8])),
+		ObjectId: readID(reader),
 	}
 }
 
-func readRootThreadBlock(data []byte) interface{} {
+func readRootThreadBlock(reader *bytes.Reader) interface{} {
 	return RootThreadBlock{
-		ObjectId:           ID(binary.BigEndian.Uint64(data[:8])),
-		ThreadSerialNumber: int32(binary.BigEndian.Uint32(data[8:12])),
+		ObjectId:           readID(reader),
+		ThreadSerialNumber: readInt32(reader),
 	}
 }
 
-func readRootMonitorUsed(data []byte) interface{} {
+func readRootMonitorUsed(reader *bytes.Reader) interface{} {
 	return RootMonitorUsed{
-		ObjectId: ID(binary.BigEndian.Uint64(data[:8])),
+		ObjectId: readID(reader),
 	}
 }
 
-func readRootThreadObject(data []byte) interface{} {
+func readRootThreadObject(reader *bytes.Reader) interface{} {
 	return RootThreadObject{
-		ObjectId:               ID(binary.BigEndian.Uint64(data[:8])),
-		ThreadSerialNumber:     int32(binary.BigEndian.Uint32(data[8:12])),
-		StackTraceSerialNumber: int32(binary.BigEndian.Uint32(data[12:16])),
+		ObjectId:               readID(reader),
+		ThreadSerialNumber:     readInt32(reader),
+		StackTraceSerialNumber: readInt32(reader),
 	}
 }
 
-func readClassDump(data []byte) interface{} {
+func readClassDump(reader *bytes.Reader) interface{} {
 	classDump := ClassDump{
-		ClassObjectId:            ID(binary.BigEndian.Uint64(data[:8])),
-		StackTraceSerialNumber:   int32(binary.BigEndian.Uint32(data[8:12])),
-		SuperClassObjectId:       ID(binary.BigEndian.Uint64(data[12:20])),
-		ClassLoaderObjectId:      ID(binary.BigEndian.Uint64(data[20:28])),
-		SignersObjectId:          ID(binary.BigEndian.Uint64(data[28:36])),
-		ProtectionDomainObjectId: ID(binary.BigEndian.Uint64(data[36:44])),
-		InstanceSize:             int32(binary.BigEndian.Uint32(data[60:64])),
+		ClassObjectId:            readID(reader),
+		StackTraceSerialNumber:   readInt32(reader),
+		SuperClassObjectId:       readID(reader),
+		ClassLoaderObjectId:      readID(reader),
+		SignersObjectId:          readID(reader),
+		ProtectionDomainObjectId: readID(reader),
+		InstanceSize:             readInt32(reader),
 	}
 
 	// Read the constant pool
-	classDump.ConstantPoolSize = int16(binary.BigEndian.Uint16(data[64:66]))
+	classDump.ConstantPoolSize = readInt16(reader)
 	classDump.ConstantPool = make([]ConstantPoolRecord, classDump.ConstantPoolSize)
-	offset := 66
 	for i := 0; i < int(classDump.ConstantPoolSize); i++ {
 		constantPoolRecord := ConstantPoolRecord{
-			ConstantPoolIndex: int16(binary.BigEndian.Uint16(data[offset : offset+2])),
-			Type:              BasicType(data[offset+2]),
+			ConstantPoolIndex: readInt16(reader),
+			Type:              readBasicType(reader),
 		}
-		offset += 3
-		switch constantPoolRecord.Type {
-		case Boolean, Byte, Char:
-			constantPoolRecord.Value = make([]byte, 1)
-			copy(constantPoolRecord.Value, data[offset:offset+1])
-			offset++
-		case Short:
-			constantPoolRecord.Value = make([]byte, 2)
-			copy(constantPoolRecord.Value, data[offset:offset+2])
-			offset += 2
-		case Float, Int:
-			constantPoolRecord.Value = make([]byte, 4)
-			copy(constantPoolRecord.Value, data[offset:offset+4])
-			offset += 4
-		case Double, Long:
-			constantPoolRecord.Value = make([]byte, 8)
-			copy(constantPoolRecord.Value, data[offset:offset+8])
-			offset += 8
-		}
+		constantPoolRecord.Value = readArray(reader, constantPoolRecord.Type.GetSize())
 		classDump.ConstantPool[i] = constantPoolRecord
 	}
 
 	// Read the static fields
-	classDump.NumberOfStaticFields = int16(binary.BigEndian.Uint16(data[offset : offset+2]))
+	classDump.NumberOfStaticFields = readInt16(reader)
 	classDump.StaticFields = make([]StaticFieldRecord, classDump.NumberOfStaticFields)
-	offset += 2
 	for i := 0; i < int(classDump.NumberOfStaticFields); i++ {
 		staticFieldRecord := StaticFieldRecord{
-			StaticFieldNameStringId: ID(binary.BigEndian.Uint64(data[offset : offset+8])),
-			Type:                    BasicType(data[offset+8]),
+			StaticFieldNameStringId: readID(reader),
+			Type:                    readBasicType(reader),
 		}
-		offset += 9
-		switch staticFieldRecord.Type {
-		case Boolean, Byte, Char:
-			staticFieldRecord.Value = make([]byte, 1)
-			copy(staticFieldRecord.Value, data[offset:offset+1])
-			offset++
-		case Short:
-			staticFieldRecord.Value = make([]byte, 2)
-			copy(staticFieldRecord.Value, data[offset:offset+2])
-			offset += 2
-		case Float, Int:
-			staticFieldRecord.Value = make([]byte, 4)
-			copy(staticFieldRecord.Value, data[offset:offset+4])
-			offset += 4
-		case Double, Long:
-			staticFieldRecord.Value = make([]byte, 8)
-			copy(staticFieldRecord.Value, data[offset:offset+8])
-			offset += 8
-		}
+		staticFieldRecord.Value = readArray(reader, staticFieldRecord.Type.GetSize())
 		classDump.StaticFields[i] = staticFieldRecord
 	}
 
 	// Read the instance fields
-	classDump.NumberOfInstanceFields = int16(binary.BigEndian.Uint16(data[offset : offset+2]))
+	classDump.NumberOfInstanceFields = readInt16(reader)
 	classDump.InstanceFields = make([]InstanceFieldRecord, classDump.NumberOfInstanceFields)
-	offset += 2
 	for i := 0; i < int(classDump.NumberOfInstanceFields); i++ {
 		instanceFieldRecord := InstanceFieldRecord{
-			FieldNameStringId: ID(binary.BigEndian.Uint64(data[offset : offset+8])),
-			Type:              BasicType(data[offset+8]),
+			FieldNameStringId: readID(reader),
+			Type:              readBasicType(reader),
 		}
 		classDump.InstanceFields[i] = instanceFieldRecord
-		offset += 9
 	}
 
 	return classDump
 }
 
-func readInstanceDump(data []byte) interface{} {
+func readInstanceDump(reader *bytes.Reader) interface{} {
 	instanceDump := InstanceDump{
-		ObjectId:               ID(binary.BigEndian.Uint64(data[:8])),
-		StackTraceSerialNumber: int32(binary.BigEndian.Uint32(data[8:12])),
-		ClassObjectId:          ID(binary.BigEndian.Uint64(data[12:20])),
-		NumberOfBytes:          int32(binary.BigEndian.Uint32(data[20:24])),
+		ObjectId:               readID(reader),
+		StackTraceSerialNumber: readInt32(reader),
+		ClassObjectId:          readID(reader),
+		NumberOfBytes:          readInt32(reader),
 	}
 
-	// Read the fields
-	instanceDump.InstanceFieldValues = make([]byte, instanceDump.NumberOfBytes)
-	copy(instanceDump.InstanceFieldValues, data[24:24+instanceDump.NumberOfBytes])
+	instanceDump.InstanceFieldValues = readArray(reader, instanceDump.NumberOfBytes)
 
 	return instanceDump
 }
 
-func readObjectArrayDump(data []byte) interface{} {
+func readObjectArrayDump(reader *bytes.Reader) interface{} {
 	objectArrayDump := ObjectArrayDump{
-		ArrayObjectId:          ID(binary.BigEndian.Uint64(data[:8])),
-		StackTraceSerialNumber: int32(binary.BigEndian.Uint32(data[8:12])),
-		NumberOfElements:       int32(binary.BigEndian.Uint32(data[12:16])),
-		ArrayClassObjectId:     ID(binary.BigEndian.Uint64(data[16:24])),
+		ArrayObjectId:          readID(reader),
+		StackTraceSerialNumber: readInt32(reader),
+		NumberOfElements:       readInt32(reader),
+		ArrayClassObjectId:     readID(reader),
 	}
 
-	// Read the elements
 	objectArrayDump.Elements = make([]ID, objectArrayDump.NumberOfElements)
 	for i := 0; i < int(objectArrayDump.NumberOfElements); i++ {
-		objectArrayDump.Elements[i] = ID(binary.BigEndian.Uint64(data[24+i*8 : 24+(i+1)*8]))
+		objectArrayDump.Elements[i] = readID(reader)
 	}
 
 	return objectArrayDump
 }
 
-func readPrimitiveArrayDump(data []byte) interface{} {
+func readPrimitiveArrayDump(reader *bytes.Reader) interface{} {
 	primitiveArrayDump := PrimitiveArrayDump{
-		ArrayObjectId:          ID(binary.BigEndian.Uint64(data[:8])),
-		StackTraceSerialNumber: int32(binary.BigEndian.Uint32(data[8:12])),
-		NumberOfElements:       int32(binary.BigEndian.Uint32(data[12:16])),
-		ElementType:            BasicType(data[16]),
+		ArrayObjectId:          readID(reader),
+		StackTraceSerialNumber: readInt32(reader),
+		NumberOfElements:       readInt32(reader),
+		ElementType:            readBasicType(reader),
 	}
 
-	var elementSize int32
-	switch primitiveArrayDump.ElementType {
-	case Boolean, Byte, Char:
-		elementSize = 1
-	case Short:
-		elementSize = 2
-	case Float, Int:
-		elementSize = 4
-	case Double, Long:
-		elementSize = 8
-	}
-
-	// Read the elements
-	primitiveArrayDump.Elements = make([]byte, primitiveArrayDump.NumberOfElements*elementSize)
-	copy(primitiveArrayDump.Elements, data[17:17+(primitiveArrayDump.NumberOfElements*elementSize)])
+	primitiveArrayDump.Elements = readArray(
+		reader,
+		primitiveArrayDump.NumberOfElements*primitiveArrayDump.ElementType.GetSize(),
+	)
 
 	return primitiveArrayDump
 }
 
 func parseHeapDump(heapDumpFile *os.File) {
 
-	type readerFunction func([]byte) interface{}
+	type readerFunction func(*bytes.Reader) interface{}
 
 	subTagFuncMap := map[HeapDumpSubTag]readerFunction{
-		RootUnknownTag:      readRootUnknown,
-		RootJNIGlobalTag:    readRootJNIGlobal,
-		RootJNILocalTag:     readRootJNILocal,
-		RootJavaFrameTag:    readRootJavaFrame,
-		RootNativeStackTag:  readRootNativeStack,
-		RootStickyClassTag:  readRootStickyClass,
-		RootThreadBlockTag:  readRootThreadBlock,
-		RootMonitorUsedTag:  readRootMonitorUsed,
-		RootThreadObjectTag: readRootThreadObject,
-	}
-
-	subTagSizeMap := map[HeapDumpSubTag]int{
-		RootUnknownTag:      8,
-		RootJNIGlobalTag:    16,
-		RootJNILocalTag:     16,
-		RootJavaFrameTag:    16,
-		RootNativeStackTag:  12,
-		RootStickyClassTag:  8,
-		RootThreadBlockTag:  12,
-		RootMonitorUsedTag:  8,
-		RootThreadObjectTag: 16,
+		RootUnknownTag:        readRootUnknown,
+		RootJNIGlobalTag:      readRootJNIGlobal,
+		RootJNILocalTag:       readRootJNILocal,
+		RootJavaFrameTag:      readRootJavaFrame,
+		RootNativeStackTag:    readRootNativeStack,
+		RootStickyClassTag:    readRootStickyClass,
+		RootThreadBlockTag:    readRootThreadBlock,
+		RootMonitorUsedTag:    readRootMonitorUsed,
+		RootThreadObjectTag:   readRootThreadObject,
+		ClassDumpTag:          readClassDump,
+		InstanceDumpTag:       readInstanceDump,
+		ObjectArrayDumpTag:    readObjectArrayDump,
+		PrimitiveArrayDumpTag: readPrimitiveArrayDump,
 	}
 
 	IDtoStringInUTF8 := make(map[ID]string)
@@ -708,27 +696,10 @@ func parseHeapDump(heapDumpFile *os.File) {
 					break
 				}
 
-				switch subTag {
-				case ClassDumpTag:
-				//TODO
-				case InstanceDumpTag:
-				//TODO
-				case ObjectArrayDumpTag:
-				//TODO
-				case PrimitiveArrayDumpTag:
-				//TODO
-				default:
-					if readerFunction, ok := subTagFuncMap[subTag]; ok {
-						subTagSize := subTagSizeMap[subTag]
-						data := make([]byte, subTagSize)
-						_, err := reader.Read(data)
-						if err != nil {
-							fmt.Errorf("Error reading sub tag data: %v\n", err)
-						}
-						fmt.Printf("------%s\n", readerFunction(data))
-					} else {
-						fmt.Errorf("Unknown sub tag: %d\n", subTag)
-					}
+				if readerFunction, ok := subTagFuncMap[subTag]; ok {
+					fmt.Printf("------%s\n", readerFunction(reader))
+				} else {
+					fmt.Errorf("Unknown sub tag: %d\n", subTag)
 				}
 			}
 		}
