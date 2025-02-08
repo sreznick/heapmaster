@@ -1,0 +1,113 @@
+Header: {Magic:JAVA PROFILE 1.0.2 IdentifierSize:8 HighWord:403 LowWord:-1354446583}
+Reached end of file.
+
+
+
+
+Top 15 classes by instance size
+1. Class ID: 4292873424, Size: 126602, Name: java/lang/String
+2. Class ID: 4292947504, Size: 75572, Name: java/util/concurrent/ConcurrentHashMap$Node
+3. Class ID: 4292961392, Size: 54012, Name: java/util/HashMap$Node
+4. Class ID: 4292911920, Size: 13152, Name: java/util/HashMap
+5. Class ID: 4292921608, Size: 8712, Name: java/lang/module/ModuleDescriptor$Exports
+6. Class ID: 4292930016, Size: 8064, Name: java/net/URI
+7. Class ID: 4292894360, Size: 8008, Name: java/lang/invoke/MemberName
+8. Class ID: 4292894104, Size: 7200, Name: java/lang/invoke/MethodType
+9. Class ID: 4292940928, Size: 6912, Name: java/lang/invoke/MethodType$ConcurrentWeakInternSet$WeakEntry
+10. Class ID: 4292935464, Size: 6052, Name: java/lang/invoke/LambdaForm$Name
+11. Class ID: 4292910128, Size: 5922, Name: java/lang/module/ModuleDescriptor
+12. Class ID: 4293080472, Size: 5814, Name: jdk/internal/math/FDBigInteger
+13. Class ID: 4292981736, Size: 5292, Name: jdk/internal/module/ModuleReferenceImpl
+14. Class ID: 4292899352, Size: 4620, Name: java/util/concurrent/ConcurrentHashMap
+15. Class ID: 4292873120, Size: 4485, Name: java/lang/Module
+
+
+Top 15 classes by instance count
+1. Class ID: 4292873424, Count: 9042, Name: java/lang/String
+2. Class ID: 4292947504, Count: 2698, Name: java/util/concurrent/ConcurrentHashMap$Node
+3. Class ID: 4292961392, Count: 1928, Name: java/util/HashMap$Node
+4. Class ID: 4292921608, Count: 362, Name: java/lang/module/ModuleDescriptor$Exports
+5. Class ID: 4293080472, Count: 341, Name: jdk/internal/math/FDBigInteger
+6. Class ID: 4292911920, Count: 273, Name: java/util/HashMap
+7. Class ID: 4292876960, Count: 268, Name: java/lang/Integer
+8. Class ID: 4292877360, Count: 256, Name: java/lang/Long
+9. Class ID: 4292872392, Count: 256, Name: java/lang/Object
+10. Class ID: 4292876352, Count: 256, Name: java/lang/Byte
+11. Class ID: 4292876656, Count: 256, Name: java/lang/Short
+12. Class ID: 4292954904, Count: 249, Name: java/util/ImmutableCollections$Set12
+13. Class ID: 4292910624, Count: 203, Name: java/util/HashSet
+14. Class ID: 4292940928, Count: 191, Name: java/lang/invoke/MethodType$ConcurrentWeakInternSet$WeakEntry
+15. Class ID: 4292999176, Count: 187, Name: jdk/internal/module/ServicesCatalog$ServiceProvider
+
+
+Object loaders info
+Loader ID: 0, Name: Bootstrap ClassLoader (System), Number of objects: 1034
+		Class ID: 4292965312, Name: [Ljava/lang/Enum;
+		Class ID: 4292994800, Name: [Ljava/lang/module/ModuleDescriptor$Requires$Modifier;
+		Class ID: 4292908792, Name: java/util/Spliterators
+		Class ID: 4045611064, Name: [Ljava/time/LocalTime;
+		Class ID: 4045612736, Name: [Ljava/net/URL;
+		Class ID: 4293079144, Name: jdk/internal/loader/FileURLMapper
+		Class ID: 4292974784, Name: java/lang/Terminator$1
+		Class ID: 4292955288, Name: java/util/ImmutableCollections$Set12$1
+		Class ID: 4045606408, Name: [Ljava/time/temporal/TemporalField;
+		Class ID: 4292888760, Name: java/lang/OutOfMemoryError
+		Class ID: 4045577920, Name: java/lang/management/DefaultPlatformMBeanProvider$8
+		Class ID: 4045577784, Name: java/lang/management/DefaultPlatformMBeanProvider$7
+		Class ID: 4292981104, Name: java/nio/file/FileSystem
+		Class ID: 4292983992, Name: [Ljdk/internal/module/ModuleHashes;
+		Class ID: 4292880792, Name: java/lang/CharSequence
+		...
+Loader ID: 4293225160, Name: jdk/internal/loader/ClassLoaders$AppClassLoader, Number of objects: 56
+		Class ID: 4045412904, Name: kotlin/ranges/IntRange
+		Class ID: 4045428400, Name: kotlin/collections/CollectionsKt__ReversedViewsKt
+		Class ID: 4045428064, Name: kotlin/collections/CollectionsKt__IteratorsKt
+		Class ID: 4045428176, Name: kotlin/collections/CollectionsKt__MutableCollectionsJVMKt
+		Class ID: 4045441992, Name: kotlin/collections/CharIterator
+		Class ID: 4045427952, Name: kotlin/collections/CollectionsKt__IteratorsJVMKt
+		Class ID: 4045441816, Name: kotlin/UninitializedPropertyAccessException
+		Class ID: 4045416440, Name: kotlin/random/AbstractPlatformRandom
+		Class ID: 4045412312, Name: kotlin/text/StringsKt___StringsJvmKt
+		Class ID: 4045487520, Name: kotlin/ranges/CharRange
+		Class ID: 4045428288, Name: kotlin/collections/CollectionsKt__MutableCollectionsKt
+		Class ID: 4045415152, Name: kotlin/collections/IntIterator
+		Class ID: 4045415968, Name: kotlin/internal/jdk7/JDK7PlatformImplementations
+		Class ID: 4045425224, Name: kotlin/text/StringsKt__StringBuilderJVMKt
+		Class ID: 4045487816, Name: kotlin/ranges/CharRange$Companion
+		...
+
+
+Top 15 classes by full size (with all depends object)
+1. Class ID: 4292899664, Size: 122885786, Name: java/util/ArrayList
+2. Class ID: 4292873424, Size: 116863143, Name: java/lang/String
+3. Class ID: 4292899352, Size: 557092, Name: java/util/concurrent/ConcurrentHashMap
+4. Class ID: 4292947504, Size: 493367, Name: java/util/concurrent/ConcurrentHashMap$Node
+5. Class ID: 4292911920, Size: 447504, Name: java/util/HashMap
+6. Class ID: 4292961392, Size: 430966, Name: java/util/HashMap$Node
+7. Class ID: 4292998984, Size: 392606, Name: java/util/concurrent/CopyOnWriteArrayList
+8. Class ID: 4292894104, Size: 290362, Name: java/lang/invoke/MethodType
+9. Class ID: 4292895216, Size: 290333, Name: java/lang/invoke/LambdaForm
+10. Class ID: 4292910624, Size: 286249, Name: java/util/HashSet
+11. Class ID: 4292872048, Size: 281913, Name: java/lang/System
+12. Class ID: 4292894360, Size: 278316, Name: java/lang/invoke/MemberName
+13. Class ID: 4292935464, Size: 274974, Name: java/lang/invoke/LambdaForm$Name
+14. Class ID: 4292946432, Size: 274530, Name: jdk/internal/loader/ArchivedClassLoaders
+15. Class ID: 4292935672, Size: 265039, Name: java/lang/invoke/LambdaForm$NamedFunction
+
+
+Top 15 arrays by size
+1. Array: byte, Size: 117056313
+2. Array: [Ljava/lang/Object;, Size: 6662808
+3. Array: [Ljava/util/concurrent/ConcurrentHashMap$Node;, Size: 69472
+4. Array: [Ljava/util/HashMap$Node;, Size: 57440
+5. Array: int, Size: 51176
+6. Array: char, Size: 33022
+7. Array: [Ljava/lang/ref/SoftReference;, Size: 11880
+8. Array: [Ljava/lang/String;, Size: 10992
+9. Array: [Ljava/lang/invoke/MethodHandle;, Size: 8840
+10. Array: [Ljava/lang/Class;, Size: 5720
+11. Array: [Ljava/lang/invoke/LambdaForm$Name;, Size: 3512
+12. Array: long, Size: 3016
+13. Array: [[B, Size: 2832
+14. Array: [Ljdk/internal/math/FDBigInteger;, Size: 2736
+15. Array: [Ljava/lang/Byte;, Size: 2064
