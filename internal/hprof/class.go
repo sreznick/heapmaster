@@ -760,7 +760,7 @@ var (
 
 const ArrayHeaderSize = int32(16)
 
-func parseHeapDump(heapDumpFile *os.File) {
+func ParseHeapDump(heapDumpFile *os.File) {
 
 	type readerFunction func(*bytes.Reader) interface{}
 
@@ -1100,14 +1100,24 @@ func getReferences(obj interface{}) []ID {
 }
 
 func parseInstanceReferences(instance InstanceDump) []ID {
-	classDump, ok := ClassObjectIdToClassDumpMap[instance.ClassObjectId]
-	if !ok {
-		return nil
+	currentClassId := instance.ClassObjectId
+	var allFields []InstanceFieldRecord
+
+	for {
+		classDump, ok := ClassObjectIdToClassDumpMap[currentClassId]
+		if !ok {
+			break
+		}
+		allFields = append(classDump.InstanceFields, allFields...)
+		currentClassId = classDump.SuperClassObjectId
+		if currentClassId == 0 {
+			break
+		}
 	}
 
 	var refs []ID
 	offset := 0
-	for _, field := range classDump.InstanceFields {
+	for _, field := range allFields {
 		if field.Type == Object {
 			start := offset
 			end := offset + 8
