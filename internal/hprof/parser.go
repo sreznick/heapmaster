@@ -1,6 +1,8 @@
 package hprof
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -24,105 +26,148 @@ const (
 	SubTagRootJNILocal  HeapSubTag = 0x02
 )
 
-func ProcessRecords(file *os.File, IDtoStringInUTF8 map[int64]string) ([]StackTrace, []StackFrame, []RootJavaFrame, []RootJNILocal, []StartThread, []EndThread, error) {
+func ProcessRecords(file *os.File, IDtoStringInUTF8 map[ID]string) ([]StackTrace, []StackFrame, map[int32]ID, []StartThread, []EndThread, []RootJNILocal, []RootNativeStack, error) {
 	var (
-		stackTraces    []StackTrace
-		stackFrames    []StackFrame
-		rootJavaFrames []RootJavaFrame
-		rootJNILocals  []RootJNILocal
-		startThreads   []StartThread
-		endThreads     []EndThread
+		stackTraces      []StackTrace
+		stackFrames      []StackFrame
+		rootJavaFrames   []RootJavaFrame
+		rootJNIGlobals   []RootJNIGlobal
+		rootJNILocals    []RootJNILocal
+		startThreads     []StartThread
+		endThreads       []EndThread
+		rootNativeStacks []RootNativeStack
 	)
+
+	var ClassSerialToNameId = make(map[int32]ID)
+
+	subTagFuncMap := map[HeapDumpSubTag]func(*bytes.Reader) interface{}{
+		RootUnknownTag:        readRootUnknown,
+		RootJNIGlobalTag:      readRootJNIGlobal,
+		RootJNILocalTag:       readRootJNILocal,
+		RootJavaFrameTag:      readRootJavaFrame,
+		RootNativeStackTag:    readRootNativeStack,
+		RootStickyClassTag:    readRootStickyClass,
+		RootThreadBlockTag:    readRootThreadBlock,
+		RootMonitorUsedTag:    readRootMonitorUsed,
+		RootThreadObjectTag:   readRootThreadObject,
+		ClassDumpTag:          readClassDump,
+		InstanceDumpTag:       readInstanceDump,
+		ObjectArrayDumpTag:    readObjectArrayDump,
+		PrimitiveArrayDumpTag: readPrimitiveArrayDump,
+	}
 
 	for {
 		record, err := readRecord(file)
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			return nil, nil, nil, nil, nil, nil, fmt.Errorf("error reading record: %v", err)
+			return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("error reading record: %v", err)
 		}
 
 		switch Tag(record.Tag) {
 		case TagStringInUTF8:
-			stringInUTF8, err := readStringInUTF8(record.Data)
-			if err != nil {
-				return nil, nil, nil, nil, nil, nil, err
+			stringInUTF8, ok := readStringInUTF8(record.Data).(StringInUTF8)
+			if !ok {
+				return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("incorrect StringInUTF8 format")
 			}
-			IDtoStringInUTF8[stringInUTF8.SerialNumber] = string(stringInUTF8.Bytes)
+			IDtoStringInUTF8[ID(stringInUTF8.StringId)] = string(stringInUTF8.Bytes)
 
-		case TagLoadClass:
-			if _, err := readLoadClass(record.Data); err != nil {
-				return nil, nil, nil, nil, nil, nil, err
+		case LoadClassTag:
+			loadClass, ok := readLoadClass(record.Data).(LoadClass)
+			if !ok {
+				return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("incorrect LoadClass format")
 			}
+			ClassSerialToNameId[loadClass.ClassSerialNumber] = loadClass.ClassNameStringId
 
 		case TagStackFrame:
-			stackFrame, err := readStackFrame(record.Data)
-			if err != nil {
-				return nil, nil, nil, nil, nil, nil, err
+			stackFrame, ok := readStackFrame(record.Data).(StackFrame)
+			if !ok {
+				return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("incorrect StackFrame format")
 			}
 			stackFrames = append(stackFrames, stackFrame)
 
 		case TagStackTrace:
-			stackTrace, err := readStackTrace(record.Data)
-			if err != nil {
-				return nil, nil, nil, nil, nil, nil, err
+			stackTrace, ok := readStackTrace(record.Data).(StackTrace)
+			if !ok {
+				return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("incorrect StackTrace format")
 			}
 			stackTraces = append(stackTraces, stackTrace)
 
-		case TagStartThread:
-			startThread, err := readStartThread(record.Data)
-			if err != nil {
-				return nil, nil, nil, nil, nil, nil, err
+		case HeapDumpTag, HeapDumpSegmentTag:
+			heapDump := readHeapDump(record.Data)
+			reader := bytes.NewReader(heapDump.data)
+
+			for {
+				var subTag HeapDumpSubTag
+				err := binary.Read(reader, binary.BigEndian, &subTag)
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					fmt.Printf("Error while reading subtag: %v\n", err)
+					break
+				}
+				if readerFunction, ok := subTagFuncMap[subTag]; ok {
+					switch subTag {
+					case RootJNIGlobalTag:
+						result := readerFunction(reader)
+						if global, valid := result.(RootJNIGlobal); valid {
+							rootJNIGlobals = append(rootJNIGlobals, global)
+						}
+
+					case RootJNILocalTag:
+						result := readerFunction(reader)
+						if local, valid := result.(RootJNILocal); valid {
+							rootJNILocals = append(rootJNILocals, local)
+						}
+
+					case RootNativeStackTag:
+						result := readerFunction(reader)
+						if stack, valid := result.(RootNativeStack); valid {
+							rootNativeStacks = append(rootNativeStacks, stack)
+						}
+					default:
+						_ = readerFunction(reader)
+					}
+				} else {
+					fmt.Printf("Undefined subtag: %d\n", subTag)
+					break
+				}
+			}
+
+		case StartThreadTag:
+			startThread, ok := readStartThread(record.Data).(StartThread)
+			if !ok {
+				return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("incorrect StartThread format")
 			}
 			startThreads = append(startThreads, startThread)
 
-		case TagEndThread:
-			endThread, err := readEndThread(record.Data)
-			if err != nil {
-				return nil, nil, nil, nil, nil, nil, err
+		case EndThreadTag:
+			endThread, ok := readEndThread(record.Data).(EndThread)
+			if !ok {
+				return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("incorrect EndThread format")
 			}
 			endThreads = append(endThreads, endThread)
 
-		case TagHeapDumpSegment:
-			if err := processHeapDumpSegment(record.Data, &rootJavaFrames, &rootJNILocals); err != nil {
-				return nil, nil, nil, nil, nil, nil, err
-			}
-
 		default:
-			// Skip other tags
+			fmt.Printf("Undefined tag: %#X (%d)\n", record.Tag, record.Tag)
 		}
 	}
 
-	return stackTraces, stackFrames, rootJavaFrames, rootJNILocals, startThreads, endThreads, nil
-}
-
-func processHeapDumpSegment(data []byte, rootJavaFrames *[]RootJavaFrame, rootJNILocals *[]RootJNILocal) error {
-	offset := 0
-	for offset < len(data) {
-		subTag := HeapSubTag(data[offset])
-		offset++
-
-		switch subTag {
-		case SubTagRootJavaFrame:
-			frame, err := readRootJavaFrame(data[offset:])
-			if err != nil {
-				return err
-			}
-			*rootJavaFrames = append(*rootJavaFrames, frame)
-			offset += 12
-
-		case SubTagRootJNILocal:
-			local, err := readRootJNILocal(data[offset:])
-			if err != nil {
-				return err
-			}
-			*rootJNILocals = append(*rootJNILocals, local)
-			offset += 12
-
-		default:
-			offset++
-		}
+	fmt.Println("Root Java Frames:")
+	for _, frame := range rootJavaFrames {
+		fmt.Printf("%+v\n", frame)
 	}
 
-	return nil
+	fmt.Println("Root JNI Globals:")
+	for _, global := range rootJNIGlobals {
+		fmt.Printf("%+v\n", global)
+	}
+
+	// fmt.Println("Root JNI Locals:")
+	// for _, local := range rootJNILocals {
+	// 	fmt.Printf("%+v\n", local)
+	// }
+
+	return stackTraces, stackFrames, ClassSerialToNameId, startThreads, endThreads, rootJNILocals, rootNativeStacks, nil
 }

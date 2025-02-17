@@ -44,9 +44,9 @@ func processStackDump(name string) error {
 	}
 	fmt.Printf("Started at: %s\n", header.TimeStamp)
 
-	idMap := make(map[int64]string)
-
-	stackTraces, stackFrames, _, _, startThreads, endThreads, err := hprof.ProcessRecords(f, idMap)
+	idMap := make(map[hprof.ID]string)
+	classSerialToName := make(map[int32]hprof.ID)
+	stackTraces, stackFrames, classSerialToName, startThreads, endThreads, rootJNILocals, rootNativeStacks, err := hprof.ProcessRecords(f, idMap)
 	if err != nil {
 		return fmt.Errorf("error processing records: %v", err)
 	}
@@ -59,11 +59,11 @@ func processStackDump(name string) error {
 		threadStatus[endThread.ThreadSerialNumber] = false
 	}
 
-	threadStacks, err := hprof.BuildThreadStacks(stackTraces, stackFrames, threadStatus)
+	threadStacks, err := hprof.BuildThreadStacks(stackTraces, stackFrames, threadStatus, rootJNILocals, rootNativeStacks)
 	if err != nil {
 		return fmt.Errorf("error building thread stacks: %v", err)
 	}
 
-	hprof.PrintStackInfo(stackTraces, stackFrames, threadStacks, idMap)
+	hprof.PrintStackInfo(stackTraces, stackFrames, threadStacks, idMap, classSerialToName)
 	return nil
 }

@@ -6,26 +6,50 @@ import (
 )
 
 type ThreadStack struct {
-	ThreadID    int32
-	StackFrames []StackFrame
-	IsAlive     bool
+	ThreadID        int32
+	StackFrames     []StackFrame
+	IsAlive         bool
+	RootJNILocal    []RootJNILocal
+	RootNativeStack []RootNativeStack
 }
 
-func BuildThreadStacks(stackTraces []StackTrace, stackFrames []StackFrame, threadStatus map[int32]bool) ([]ThreadStack, error) {
+func BuildThreadStacks(stackTraces []StackTrace, stackFrames []StackFrame, threadStatus map[int32]bool, rootJNILocals []RootJNILocal, rootNativeStacks []RootNativeStack) ([]ThreadStack, error) {
 	var threadStacks []ThreadStack
 
 	for _, trace := range stackTraces {
 		var frames []StackFrame
 		for _, frameID := range trace.FramesID {
-			if frameID >= 0 && int(frameID) < len(stackFrames) {
-				frames = append(frames, stackFrames[frameID])
+			if int(frameID) <= len(stackFrames) {
+				frames = append(frames, stackFrames[frameID-1])
+			}
+		}
+		//var associatedRootJNIGlobals []RootJNIGlobal
+		var associatedRootJNILocals []RootJNILocal
+
+		var associatedRootNativeStacks []RootNativeStack
+		// for _, global := range rootJNIGlobals {
+		// 	if global.ThreadSerialNumber == trace.ThreadSerialNumber {
+		// 		associatedRootJNIGlobals = append(associatedRootJNIGlobals, global)
+		// 	}
+		// }
+		for _, local := range rootJNILocals {
+			if local.ThreadSerialNumber == trace.ThreadSerialNumber {
+				associatedRootJNILocals = append(associatedRootJNILocals, local)
+			}
+		}
+
+		for _, nativeStack := range rootNativeStacks {
+			if nativeStack.ThreadSerialNumber == trace.ThreadSerialNumber {
+				associatedRootNativeStacks = append(associatedRootNativeStacks, nativeStack)
 			}
 		}
 
 		threadStacks = append(threadStacks, ThreadStack{
-			ThreadID:    trace.ThreadSerialNumber,
-			StackFrames: frames,
-			IsAlive:     threadStatus[trace.ThreadSerialNumber],
+			ThreadID:        trace.ThreadSerialNumber,
+			StackFrames:     frames,
+			IsAlive:         threadStatus[trace.ThreadSerialNumber],
+			RootJNILocal:    associatedRootJNILocals,
+			RootNativeStack: associatedRootNativeStacks,
 		})
 	}
 
@@ -122,17 +146,17 @@ func convertSignature(signature string) string {
 	}
 	return result
 }
-func PrintStackInfo(traces []StackTrace, frames []StackFrame, stacks []ThreadStack, idMap map[int64]string) {
+func PrintStackInfo(traces []StackTrace, frames []StackFrame, stacks []ThreadStack, idMap map[ID]string, classSerialToName map[int32]ID) {
 	printStackTraces(traces, idMap)
 	printStackFrames(frames, idMap)
-	printThreadStacks(stacks, idMap)
+	printThreadStacks(stacks, idMap, classSerialToName)
 }
 
-func printStackTraces(traces []StackTrace, idMap map[int64]string) {
+func printStackTraces(traces []StackTrace, idMap map[ID]string) {
 	fmt.Println("\n--- Stack Traces ---")
 	for _, trace := range traces {
 		threadName := "unknown"
-		if name, ok := idMap[int64(trace.ThreadSerialNumber)]; ok {
+		if name, ok := idMap[ID(trace.ThreadSerialNumber)]; ok {
 			threadName = name
 		}
 
@@ -144,7 +168,7 @@ func printStackTraces(traces []StackTrace, idMap map[int64]string) {
 	}
 }
 
-func printStackFrames(frames []StackFrame, idMap map[int64]string) {
+func printStackFrames(frames []StackFrame, idMap map[ID]string) {
 	fmt.Println("\n--- Stack Frames ---")
 	for i, frame := range frames {
 		signature := "unknown"
@@ -166,7 +190,7 @@ func printStackFrames(frames []StackFrame, idMap map[int64]string) {
 	}
 }
 
-func printThreadStacks(stacks []ThreadStack, idMap map[int64]string) {
+func printThreadStacks(stacks []ThreadStack, idMap map[ID]string, classSerialToName map[int32]ID) {
 	fmt.Println("\n--- Thread Stacks ---")
 	for _, stack := range stacks {
 		status := "DEAD"
@@ -175,6 +199,21 @@ func printThreadStacks(stacks []ThreadStack, idMap map[int64]string) {
 		}
 
 		fmt.Printf("\n[Thread %d - %s]\n", stack.ThreadID, status)
+
+		if len(stack.RootJNILocal) > 0 {
+			fmt.Println("  Root JNI Locals:")
+			for _, local := range stack.RootJNILocal {
+				fmt.Printf("    ObjectID: %v, FrameNumber: %v, ThreadSerialNumber: %v\n",
+					local.ObjectId, local.FrameNumber, local.ThreadSerialNumber)
+			}
+		}
+
+		if len(stack.RootNativeStack) > 0 {
+			fmt.Println("  Root Native Stacks:")
+			for _, native := range stack.RootNativeStack {
+				fmt.Printf("    ObjectID: %v, ThreadSerialNumber: %v\n", native.ObjectId, native.ThreadSerialNumber)
+			}
+		}
 
 		if len(stack.StackFrames) == 0 {
 			fmt.Println("  No stack frames")
@@ -192,7 +231,14 @@ func printThreadStacks(stacks []ThreadStack, idMap map[int64]string) {
 				signature = convertSignature(sig)
 			}
 
-			fmt.Printf("  %d. %s %s\n", i+1, methodName, signature)
+			className := "unknown"
+			if classId, ok := classSerialToName[frame.ClassSerialNumber]; ok {
+				if name, ok := idMap[classId]; ok {
+					className = name
+				}
+			}
+
+			fmt.Printf("  %d. %s.%s %s\n", i+1, className, methodName, signature)
 		}
 	}
 }
