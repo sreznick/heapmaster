@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 )
 
 type HprofHeader struct {
@@ -22,7 +23,8 @@ type HprofRecord struct {
 	Data   []byte
 }
 
-// 0 for object,
+// 0 for non-array,
+// 2 for object,
 // 4 for boolean,
 // 5 for char,
 // 6 for float,
@@ -34,29 +36,54 @@ type HprofRecord struct {
 type BasicType byte
 
 const (
-	Object  BasicType = 0  //only in AllocSites, 0 means not an array, non-zero means an array of the given type
-	Boolean BasicType = 4  //1 byte
-	Char    BasicType = 5  //1 byte
-	Float   BasicType = 6  //4 bytes
-	Double  BasicType = 7  //8 bytes
-	Byte    BasicType = 8  //1 byte
-	Short   BasicType = 9  //2 bytes
-	Int     BasicType = 10 //4 bytes
-	Long    BasicType = 11 //8 bytes
+	NonArray BasicType = 0 //only in AllocSites, 0 means not an array, non-zero means an array of the given type
+	Object   BasicType = 2
+	Boolean  BasicType = 4  //1 byte
+	Char     BasicType = 5  //2 byte
+	Float    BasicType = 6  //4 bytes
+	Double   BasicType = 7  //8 bytes
+	Byte     BasicType = 8  //1 byte
+	Short    BasicType = 9  //2 bytes
+	Int      BasicType = 10 //4 bytes
+	Long     BasicType = 11 //8 bytes
 )
 
 func (bt BasicType) GetSize() int32 {
 	switch bt {
-	case Boolean, Byte, Char:
+	case Boolean, Byte:
 		return 1
-	case Short:
+	case Short, Char:
 		return 2
 	case Float, Int:
 		return 4
-	case Double, Long:
+	case Double, Long, Object:
 		return 8
 	}
-	return -1
+	return 0
+}
+
+func (bt BasicType) GetName() string {
+	switch bt {
+	case Boolean:
+		return "bool"
+	case Char:
+		return "char"
+	case Float:
+		return "float"
+	case Double:
+		return "double"
+	case Byte:
+		return "byte"
+	case Short:
+		return "short"
+	case Int:
+		return "int"
+	case Long:
+		return "long"
+	case Object:
+		return "object"
+	}
+	return "unknown"
 }
 
 type ID int64 // depends on the identifier size, but we will use int64 for now
@@ -69,7 +96,7 @@ type StringInUTF8 struct {
 
 // 0x02
 type LoadClass struct {
-	SerialNumber           int32
+	ClassSerialNumber      int32
 	ClassObjectId          ID
 	StackTraceSerialNumber int32
 	ClassNameStringId      ID
@@ -108,22 +135,24 @@ type AllocSites struct {
 	// 0x1 incremental / complete
 	// 0x2 sorted by allocation / line
 	// 0x4 whether to force GC
-	BitMaskSize            int16
+	BitMaskSize            uint16
 	CutoffRatio            int32
 	TotalLiveBytes         int32
 	TotalLiveInstances     int32
 	TotalBytesAllocated    int64
 	TotalInstanceAllocated int64
 	NumberOfSites          int32
-	Sites                  []struct {
-		ArrayIndicator             BasicType
-		ClassSerialNumber          int32
-		StackTraceSerialNumber     int32
-		NumberOfLiveBytes          int32
-		NumberOfLiveInstances      int32
-		NumberOfBytesAllocated     int32
-		NumberOfInstancesAllocated int32
-	}
+	Sites                  []Site
+}
+
+type Site struct {
+	ArrayIndicator             BasicType
+	ClassSerialNumber          int32
+	StackTraceSerialNumber     int32
+	NumberOfLiveBytes          int32
+	NumberOfLiveInstances      int32
+	NumberOfBytesAllocated     int32
+	NumberOfInstancesAllocated int32
 }
 
 // 0x07
@@ -157,6 +186,7 @@ type HeapDump struct {
 // 0x0D
 type CPUSamples struct {
 	TotalNumberOfSamples int32
+	NumberOfTraces       int32
 	Traces               []struct {
 		NumberOfSamples        int32
 		StackTraceSerialNumber int32
@@ -168,7 +198,7 @@ type ControlSettings struct {
 	// 0x1 alloc traces on/off
 	// 0x2 cpu sampling on/off
 	BitMask         int32
-	StackTraceDepth int16
+	StackTraceDepth uint16
 }
 
 // subtypes in heap dump
@@ -190,6 +220,38 @@ const (
 	ObjectArrayDumpTag    HeapDumpSubTag = 0x22
 	PrimitiveArrayDumpTag HeapDumpSubTag = 0x23
 )
+
+func (hdst HeapDumpSubTag) String() string {
+	switch hdst {
+	case RootUnknownTag:
+		return "RootUnknown"
+	case RootJNIGlobalTag:
+		return "RootJNIGlobal"
+	case RootJNILocalTag:
+		return "RootJNILocal"
+	case RootJavaFrameTag:
+		return "RootJavaFrame"
+	case RootNativeStackTag:
+		return "RootNativeStack"
+	case RootStickyClassTag:
+		return "RootStickyClass"
+	case RootThreadBlockTag:
+		return "RootThreadBlock"
+	case RootMonitorUsedTag:
+		return "RootMonitorUsed"
+	case RootThreadObjectTag:
+		return "RootThreadObject"
+	case ClassDumpTag:
+		return "ClassDump"
+	case InstanceDumpTag:
+		return "InstanceDump"
+	case ObjectArrayDumpTag:
+		return "ObjectArrayDump"
+	case PrimitiveArrayDumpTag:
+		return "PrimitiveArrayDump"
+	}
+	return "Unknown"
+}
 
 // 0xFF
 type RootUnknown struct {
@@ -253,19 +315,19 @@ type ClassDump struct {
 	ClassLoaderObjectId      ID
 	SignersObjectId          ID
 	ProtectionDomainObjectId ID
-	// reserved_1               ID
-	// reserved_2               ID
-	InstanceSize           int32 //in bytes
-	ConstantPoolSize       int16
-	ConstantPool           []ConstantPoolRecord
-	NumberOfStaticFields   int16
-	StaticFields           []StaticFieldRecord
-	NumberOfInstanceFields int16
-	InstanceFields         []InstanceFieldRecord
+	reserved_1               ID
+	reserved_2               ID
+	InstanceSize             int32 //in bytes
+	ConstantPoolSize         uint16
+	ConstantPool             []ConstantPoolRecord
+	NumberOfStaticFields     uint16
+	StaticFields             []StaticFieldRecord
+	NumberOfInstanceFields   uint16
+	InstanceFields           []InstanceFieldRecord
 }
 
 type ConstantPoolRecord struct {
-	ConstantPoolIndex int16
+	ConstantPoolIndex uint16
 	Type              BasicType
 	Value             []byte //size depends on the type
 }
@@ -314,8 +376,8 @@ func readID(reader *bytes.Reader) ID {
 	return id
 }
 
-func readInt64(reader *bytes.Reader) int64 {
-	var i int64
+func readInt64(reader *bytes.Reader) uint64 {
+	var i uint64
 	binary.Read(reader, binary.BigEndian, &i)
 	return i
 }
@@ -326,8 +388,8 @@ func readInt32(reader *bytes.Reader) int32 {
 	return i
 }
 
-func readInt16(reader *bytes.Reader) int16 {
-	var i int16
+func readUint16(reader *bytes.Reader) uint16 {
+	var i uint16
 	binary.Read(reader, binary.BigEndian, &i)
 	return i
 }
@@ -373,6 +435,8 @@ func readHeader(file *os.File) HprofHeader {
 	return header
 }
 
+var flag = true
+
 func readRecord(file *os.File) (HprofRecord, error) {
 	record := HprofRecord{}
 
@@ -406,10 +470,16 @@ func readRecord(file *os.File) (HprofRecord, error) {
 
 func readLoadClass(data []byte) interface{} {
 	return LoadClass{
-		SerialNumber:           int32(binary.BigEndian.Uint32(data[:4])),
+		ClassSerialNumber:      int32(binary.BigEndian.Uint32(data[:4])),
 		ClassObjectId:          ID(binary.BigEndian.Uint64(data[4:12])),
 		StackTraceSerialNumber: int32(binary.BigEndian.Uint32(data[12:16])),
 		ClassNameStringId:      ID(binary.BigEndian.Uint64(data[16:24])),
+	}
+}
+
+func readUnloadClass(data []byte) interface{} {
+	return UnloadClass{
+		ClassSerialNumber: int32(binary.BigEndian.Uint32(data[:4])),
 	}
 }
 
@@ -447,6 +517,35 @@ func readStackTrace(data []byte) interface{} {
 	return stackTrace
 }
 
+func readAllocSites(data []byte) interface{} {
+	allocSites := AllocSites{
+		BitMaskSize:            uint16(binary.BigEndian.Uint16(data[:2])),
+		CutoffRatio:            int32(binary.BigEndian.Uint32(data[2:6])),
+		TotalLiveBytes:         int32(binary.BigEndian.Uint32(data[6:10])),
+		TotalLiveInstances:     int32(binary.BigEndian.Uint32(data[10:14])),
+		TotalBytesAllocated:    int64(binary.BigEndian.Uint64(data[14:22])),
+		TotalInstanceAllocated: int64(binary.BigEndian.Uint64(data[22:30])),
+		NumberOfSites:          int32(binary.BigEndian.Uint32(data[30:34])),
+	}
+
+	// Read the sites
+	allocSites.Sites = make([]Site, allocSites.NumberOfSites)
+	for i := 0; i < int(allocSites.NumberOfSites); i++ {
+		site := Site{
+			ArrayIndicator:             BasicType(data[34+i*25]),
+			ClassSerialNumber:          int32(binary.BigEndian.Uint32(data[35+i*25 : 39+i*25])),
+			StackTraceSerialNumber:     int32(binary.BigEndian.Uint32(data[39+i*25 : 43+i*25])),
+			NumberOfLiveBytes:          int32(binary.BigEndian.Uint32(data[43+i*25 : 47+i*25])),
+			NumberOfLiveInstances:      int32(binary.BigEndian.Uint32(data[47+i*25 : 51+i*25])),
+			NumberOfBytesAllocated:     int32(binary.BigEndian.Uint32(data[51+i*25 : 55+i*25])),
+			NumberOfInstancesAllocated: int32(binary.BigEndian.Uint32(data[55+i*25 : 59+i*25])),
+		}
+		allocSites.Sites[i] = site
+	}
+
+	return allocSites
+}
+
 func readHeapDump(data []byte) HeapDump {
 	heapDump := HeapDump{}
 
@@ -454,6 +553,32 @@ func readHeapDump(data []byte) HeapDump {
 	copy(heapDump.data, data)
 
 	return heapDump
+}
+
+func readCPUSamples(data []byte) interface{} {
+	cpuSamples := CPUSamples{
+		TotalNumberOfSamples: int32(binary.BigEndian.Uint32(data[:4])),
+		NumberOfTraces:       int32(binary.BigEndian.Uint32(data[4:8])),
+	}
+
+	// Read the traces
+	cpuSamples.Traces = make([]struct {
+		NumberOfSamples        int32
+		StackTraceSerialNumber int32
+	}, cpuSamples.NumberOfTraces)
+	for i := 0; i < int(cpuSamples.NumberOfTraces); i++ {
+		cpuSamples.Traces[i].NumberOfSamples = int32(binary.BigEndian.Uint32(data[8+i*8 : 8+(i+1)*8]))
+		cpuSamples.Traces[i].StackTraceSerialNumber = int32(binary.BigEndian.Uint32(data[12+i*8 : 12+(i+1)*8]))
+	}
+
+	return cpuSamples
+}
+
+func readControlSettings(data []byte) interface{} {
+	return ControlSettings{
+		BitMask:         int32(binary.BigEndian.Uint32(data[:4])),
+		StackTraceDepth: uint16(binary.BigEndian.Uint16(data[4:6])),
+	}
 }
 
 func readRootUnknown(reader *bytes.Reader) interface{} {
@@ -527,15 +652,17 @@ func readClassDump(reader *bytes.Reader) interface{} {
 		ClassLoaderObjectId:      readID(reader),
 		SignersObjectId:          readID(reader),
 		ProtectionDomainObjectId: readID(reader),
+		reserved_1:               readID(reader),
+		reserved_2:               readID(reader),
 		InstanceSize:             readInt32(reader),
 	}
 
 	// Read the constant pool
-	classDump.ConstantPoolSize = readInt16(reader)
+	classDump.ConstantPoolSize = readUint16(reader)
 	classDump.ConstantPool = make([]ConstantPoolRecord, classDump.ConstantPoolSize)
 	for i := 0; i < int(classDump.ConstantPoolSize); i++ {
 		constantPoolRecord := ConstantPoolRecord{
-			ConstantPoolIndex: readInt16(reader),
+			ConstantPoolIndex: readUint16(reader),
 			Type:              readBasicType(reader),
 		}
 		constantPoolRecord.Value = readArray(reader, constantPoolRecord.Type.GetSize())
@@ -543,19 +670,20 @@ func readClassDump(reader *bytes.Reader) interface{} {
 	}
 
 	// Read the static fields
-	classDump.NumberOfStaticFields = readInt16(reader)
+	classDump.NumberOfStaticFields = readUint16(reader)
 	classDump.StaticFields = make([]StaticFieldRecord, classDump.NumberOfStaticFields)
 	for i := 0; i < int(classDump.NumberOfStaticFields); i++ {
 		staticFieldRecord := StaticFieldRecord{
 			StaticFieldNameStringId: readID(reader),
 			Type:                    readBasicType(reader),
 		}
+
 		staticFieldRecord.Value = readArray(reader, staticFieldRecord.Type.GetSize())
 		classDump.StaticFields[i] = staticFieldRecord
 	}
 
 	// Read the instance fields
-	classDump.NumberOfInstanceFields = readInt16(reader)
+	classDump.NumberOfInstanceFields = readUint16(reader)
 	classDump.InstanceFields = make([]InstanceFieldRecord, classDump.NumberOfInstanceFields)
 	for i := 0; i < int(classDump.NumberOfInstanceFields); i++ {
 		instanceFieldRecord := InstanceFieldRecord{
@@ -613,7 +741,26 @@ func readPrimitiveArrayDump(reader *bytes.Reader) interface{} {
 	return primitiveArrayDump
 }
 
-func parseHeapDump(heapDumpFile *os.File) {
+var (
+	IDtoStringInUTF8                = make(map[ID]string)
+	IDtoSizeClassDump               = make(map[ID]int64)
+	ClassObjectIdToClassNameID      = make(map[ID]ID)
+	IDtoStackFrame                  = make(map[ID]StackFrame)
+	StackTraceIdToStackFrameIds     = make(map[int32][]ID)
+	ClassObjectIdToCountInstances   = make(map[ID]int32)
+	IDtoClassLoaderID               = make(map[ID]ID)
+	ObjectIdToInstanceDump          = make(map[ID]InstanceDump)
+	ObjectIdToInstanceDumpMap       = make(map[ID]InstanceDump)
+	ClassObjectIdToClassDumpMap     = make(map[ID]ClassDump)
+	ObjectIdToObjectArrayDumpMap    = make(map[ID]ObjectArrayDump)
+	ObjectIdToPrimitiveArrayDumpMap = make(map[ID]PrimitiveArrayDump)
+	StringUtf8Map                   = make(map[ID]StringInUTF8)
+	ClassObjectIdToLoadClassMap     = make(map[ID]LoadClass)
+)
+
+const ArrayHeaderSize = int32(16)
+
+func ParseHeapDump(heapDumpFile *os.File) {
 
 	type readerFunction func(*bytes.Reader) interface{}
 
@@ -633,8 +780,6 @@ func parseHeapDump(heapDumpFile *os.File) {
 		PrimitiveArrayDumpTag: readPrimitiveArrayDump,
 	}
 
-	IDtoStringInUTF8 := make(map[ID]string)
-
 	// Read the header
 	header := readHeader(heapDumpFile)
 	fmt.Printf("Header: %+v\n", header)
@@ -643,47 +788,36 @@ func parseHeapDump(heapDumpFile *os.File) {
 	for {
 		record, err := readRecord(heapDumpFile)
 		if err == io.EOF {
-			fmt.Errorf("Reached end of file.")
+			fmt.Printf("Reached end of file.\n\n\n")
 			break
 		} else if err != nil {
 			fmt.Errorf("Error reading record: %v\n", err)
 			break
 		}
 
-		if record.Tag == StringUtf8Tag {
+		switch record.Tag {
+		case StringUtf8Tag:
 			stringInUTF8 := readStringInUTF8(record.Data).(StringInUTF8)
 			IDtoStringInUTF8[stringInUTF8.StringId] = string(stringInUTF8.Bytes)
-			continue
-		}
-
-		if record.Tag == LoadClassTag {
-			classLoad := readLoadClass(record.Data).(LoadClass)
-			fmt.Printf("----LoadClass: %d - %s\n", classLoad.ClassObjectId, IDtoStringInUTF8[classLoad.ClassNameStringId])
-			continue
-		}
-
-		if record.Tag == UnloadClassTag {
-			//TODO
-		}
-
-		if record.Tag == StackFrameTag {
+			StringUtf8Map[stringInUTF8.StringId] = stringInUTF8
+		case LoadClassTag:
+			loadClass := readLoadClass(record.Data).(LoadClass)
+			ClassObjectIdToClassNameID[loadClass.ClassObjectId] = loadClass.ClassNameStringId
+			ClassObjectIdToLoadClassMap[loadClass.ClassObjectId] = loadClass
+		case UnloadClassTag:
+			unloadClass := readUnloadClass(record.Data).(UnloadClass)
+			_ = unloadClass
+		case StackFrameTag:
 			stackFrame := readStackFrame(record.Data).(StackFrame)
-			fmt.Printf("----StackFrame: %d - %s\n", stackFrame.MethodId, IDtoStringInUTF8[stackFrame.MethodSignatureStringId])
-			continue
-		}
-
-		if record.Tag == StackTraceTag {
+			IDtoStackFrame[stackFrame.FrameId] = stackFrame
+		case StackTraceTag:
 			stackTrace := readStackTrace(record.Data).(StackTrace)
-			fmt.Printf("----StackTrace: %d\n", stackTrace.StackTraceSerialNumber)
-		}
-
-		if record.Tag == AllocSitesTag {
-			//TODO
-		}
-
-		if record.Tag == HeapDumpTag || record.Tag == HeapDumpSegmentTag {
+			StackTraceIdToStackFrameIds[stackTrace.StackTraceSerialNumber] = stackTrace.FramesID
+		case AllocSitesTag:
+			allocSites := readAllocSites(record.Data).(AllocSites)
+			_ = allocSites
+		case HeapDumpTag, HeapDumpSegmentTag:
 			heapDump := readHeapDump(record.Data)
-			fmt.Printf("----HeapDump: %d\n", len(heapDump.data))
 			reader := bytes.NewReader(heapDump.data)
 			for {
 				var subTag HeapDumpSubTag
@@ -697,11 +831,315 @@ func parseHeapDump(heapDumpFile *os.File) {
 				}
 
 				if readerFunction, ok := subTagFuncMap[subTag]; ok {
-					fmt.Printf("------%s\n", readerFunction(reader))
+					switch subTag {
+					case InstanceDumpTag:
+						instanceDump := readerFunction(reader).(InstanceDump)
+						IDtoSizeClassDump[instanceDump.ClassObjectId] += int64(instanceDump.NumberOfBytes)
+						ClassObjectIdToCountInstances[instanceDump.ClassObjectId]++
+						ObjectIdToInstanceDumpMap[instanceDump.ObjectId] = instanceDump
+					case ClassDumpTag:
+						classDump := readerFunction(reader).(ClassDump)
+						IDtoSizeClassDump[classDump.ClassObjectId] += int64(classDump.InstanceSize)
+						IDtoClassLoaderID[classDump.ClassObjectId] = classDump.ClassLoaderObjectId
+						ClassObjectIdToClassDumpMap[classDump.ClassObjectId] = classDump
+					case ObjectArrayDumpTag:
+						objectArrayDump := readerFunction(reader).(ObjectArrayDump)
+						ObjectIdToObjectArrayDumpMap[objectArrayDump.ArrayObjectId] = objectArrayDump
+					case PrimitiveArrayDumpTag:
+						primitiveArrayDump := readerFunction(reader).(PrimitiveArrayDump)
+						ObjectIdToPrimitiveArrayDumpMap[primitiveArrayDump.ArrayObjectId] = primitiveArrayDump
+					default:
+						_ = readerFunction(reader)
+					}
 				} else {
 					fmt.Errorf("Unknown sub tag: %d\n", subTag)
+					break
 				}
 			}
 		}
 	}
+
+	printSizeClasses(15)
+	printCountInstances(15)
+	printObjectLoadersInfo(15)
+	printFullClassSize(15)
+	printArrayInfo(15)
+}
+
+func printSizeClasses(max int) {
+	fmt.Printf("\n\nTop %d classes by instance size\n", max)
+	type IdSize struct {
+		id   ID
+		size int64
+	}
+
+	pairs := make([]IdSize, 0, len(IDtoSizeClassDump))
+	for id, size := range IDtoSizeClassDump {
+		pairs = append(pairs, IdSize{id, size})
+	}
+
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].size > pairs[j].size
+	})
+
+	for i, p := range pairs {
+		if i == max {
+			break
+		}
+		fmt.Printf("%d. Class ID: %d, Size: %d, Name: %s\n", (i + 1), p.id, p.size, IDtoStringInUTF8[ClassObjectIdToClassNameID[p.id]])
+	}
+}
+
+func printCountInstances(max int) {
+	fmt.Printf("\n\nTop %d classes by instance count\n", max)
+	type IdCount struct {
+		id    ID
+		count int32
+	}
+
+	countPairs := make([]IdCount, 0, len(ClassObjectIdToCountInstances))
+	for id, count := range ClassObjectIdToCountInstances {
+		countPairs = append(countPairs, IdCount{id, count})
+	}
+
+	sort.Slice(countPairs, func(i, j int) bool {
+		return countPairs[i].count > countPairs[j].count
+	})
+
+	for i, p := range countPairs {
+		if i == max {
+			break
+		}
+		fmt.Printf("%d. Class ID: %d, Count: %d, Name: %s\n", (i + 1), p.id, p.count, IDtoStringInUTF8[ClassObjectIdToClassNameID[p.id]])
+	}
+}
+
+func printObjectLoadersInfo(max int) {
+	loaderObjectsMap := make(map[ID]([]ID))
+	for object, loader := range IDtoClassLoaderID {
+		loaderObjectsMap[loader] = append(loaderObjectsMap[loader], object)
+	}
+
+	fmt.Printf("\n\nObject loaders info\n")
+	for loader, classes := range loaderObjectsMap {
+		loaderName := getNameByClassObjectId(ObjectIdToInstanceDumpMap[loader].ClassObjectId)
+		if loader == 0 {
+			loaderName = "Bootstrap ClassLoader (System)"
+		}
+		fmt.Printf("Loader ID: %d, Name: %s, Number of objects: %d\n", loader, loaderName, len(classes))
+		for i, obj := range classes {
+			if i == max {
+				fmt.Printf("\t\t...\n")
+				break
+			}
+			fmt.Printf("\t\tClass ID: %d, Name: %s\n", obj, getNameByClassObjectId(obj))
+		}
+	}
+}
+
+func printFullClassSize(max int) {
+	classStatsMap := CalculateClassSizes()
+
+	fmt.Printf("\n\nTop %d classes by full size (with all depends object)\n", max)
+
+	type IdStats struct {
+		id   ID
+		stat ClassStats
+	}
+
+	pairs := make([]IdStats, 0, len(classStatsMap))
+	for id, stat := range classStatsMap {
+		pairs = append(pairs, IdStats{id, stat})
+	}
+
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].stat.TotalSize > pairs[j].stat.TotalSize
+	})
+
+	for i, p := range pairs {
+		if i == max {
+			break
+		}
+		fmt.Printf("%d. Class ID: %d, Size: %d, Name: %s\n", (i + 1), p.id, p.stat.TotalSize, p.stat.ClassName)
+	}
+}
+
+func printArrayInfo(max int) {
+	type nameSize struct {
+		name string
+		size int32
+	}
+
+	nameSizeMap := make(map[string]int32)
+
+	for _, array := range ObjectIdToObjectArrayDumpMap {
+		name := getNameByClassObjectId(array.ArrayClassObjectId)
+		nameSizeMap[string(name)] += getObjectSize(array)
+	}
+
+	for _, array := range ObjectIdToPrimitiveArrayDumpMap {
+		name := array.ElementType.GetName()
+		nameSizeMap[string(name)] += getObjectSize(array)
+	}
+
+	pairs := make([]nameSize, 0, len(nameSizeMap))
+	for name, size := range nameSizeMap {
+		pairs = append(pairs, nameSize{name, size})
+	}
+
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].size > pairs[j].size
+	})
+
+	fmt.Printf("\n\nTop %d arrays by size\n", max)
+	for i, p := range pairs {
+		if i == max {
+			break
+		}
+		fmt.Printf("%d. Array: %s, Size: %d\n", (i + 1), p.name, p.size)
+	}
+}
+
+func getNameByClassObjectId(id ID) string {
+	return IDtoStringInUTF8[ClassObjectIdToClassNameID[id]]
+}
+
+type ClassStats struct {
+	ClassName string
+	TotalSize int32
+}
+
+func CalculateClassSizes() map[ID]ClassStats {
+	result := make(map[ID]ClassStats)
+
+	for classObjectId, classDump := range ClassObjectIdToClassDumpMap {
+		visited := make(map[ID]bool)
+		queue := make([]ID, 0)
+		var totalSize int32
+
+		for objId, instance := range ObjectIdToInstanceDumpMap {
+			if instance.ClassObjectId == classObjectId {
+				if visited[objId] {
+					continue
+				}
+				visited[objId] = true
+				queue = append(queue, objId)
+				totalSize += getObjectSize(instance)
+			}
+		}
+
+		for _, sf := range classDump.StaticFields {
+			if sf.Type == Object {
+				refId := ID(binary.BigEndian.Uint64(sf.Value))
+				if visited[refId] {
+					continue
+				}
+				visited[refId] = true
+				queue = append(queue, refId)
+				if obj := getObject(refId); obj != nil {
+					totalSize += getObjectSize(obj)
+				}
+			} else {
+				totalSize += sf.Type.GetSize()
+			}
+		}
+
+		for len(queue) > 0 {
+			currentId := queue[0]
+			queue = queue[1:]
+
+			obj := getObject(currentId)
+			if obj == nil {
+				continue
+			}
+
+			for _, refId := range getReferences(obj) {
+				if visited[refId] {
+					continue
+				}
+				visited[refId] = true
+				queue = append(queue, refId)
+				if refObj := getObject(refId); refObj != nil {
+					totalSize += getObjectSize(refObj)
+				}
+			}
+		}
+
+		className := getNameByClassObjectId(classObjectId)
+
+		result[classObjectId] = ClassStats{
+			ClassName: className,
+			TotalSize: totalSize,
+		}
+	}
+
+	return result
+}
+
+func getObject(objectId ID) interface{} {
+	if obj, ok := ObjectIdToInstanceDumpMap[objectId]; ok {
+		return obj
+	}
+	if obj, ok := ObjectIdToObjectArrayDumpMap[objectId]; ok {
+		return obj
+	}
+	if obj, ok := ObjectIdToPrimitiveArrayDumpMap[objectId]; ok {
+		return obj
+	}
+	return nil
+}
+
+func getReferences(obj interface{}) []ID {
+	switch v := obj.(type) {
+	case InstanceDump:
+		return parseInstanceReferences(v)
+	case ObjectArrayDump:
+		return v.Elements
+	}
+	return nil
+}
+
+func parseInstanceReferences(instance InstanceDump) []ID {
+	currentClassId := instance.ClassObjectId
+	var allFields []InstanceFieldRecord
+
+	for {
+		classDump, ok := ClassObjectIdToClassDumpMap[currentClassId]
+		if !ok {
+			break
+		}
+		allFields = append(classDump.InstanceFields, allFields...)
+		currentClassId = classDump.SuperClassObjectId
+		if currentClassId == 0 {
+			break
+		}
+	}
+
+	var refs []ID
+	offset := 0
+	for _, field := range allFields {
+		if field.Type == Object {
+			start := offset
+			end := offset + 8
+			if end > len(instance.InstanceFieldValues) {
+				break
+			}
+			refId := ID(binary.BigEndian.Uint64(instance.InstanceFieldValues[start:end]))
+			refs = append(refs, refId)
+		}
+		offset += int(field.Type.GetSize())
+	}
+	return refs
+}
+
+func getObjectSize(obj interface{}) int32 {
+	switch v := obj.(type) {
+	case InstanceDump:
+		return v.NumberOfBytes
+	case ObjectArrayDump:
+		return ArrayHeaderSize + v.NumberOfElements*8
+	case PrimitiveArrayDump:
+		return ArrayHeaderSize + v.NumberOfElements*v.ElementType.GetSize()
+	}
+	return 0
 }
