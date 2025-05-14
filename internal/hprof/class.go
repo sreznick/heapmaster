@@ -9,367 +9,6 @@ import (
 	"sort"
 )
 
-type HprofHeader struct {
-	Magic          string
-	IdentifierSize int32
-	HighWord       int32
-	LowWord        int32
-}
-
-type HprofRecord struct {
-	Tag    Tag
-	Time   int32
-	Length int32
-	Data   []byte
-}
-
-// 0 for non-array,
-// 2 for object,
-// 4 for boolean,
-// 5 for char,
-// 6 for float,
-// 7 for double,
-// 8 for byte,
-// 9 for short,
-// 10 for int,
-// 11 for long
-type BasicType byte
-
-const (
-	NonArray BasicType = 0 //only in AllocSites, 0 means not an array, non-zero means an array of the given type
-	Object   BasicType = 2
-	Boolean  BasicType = 4  //1 byte
-	Char     BasicType = 5  //2 byte
-	Float    BasicType = 6  //4 bytes
-	Double   BasicType = 7  //8 bytes
-	Byte     BasicType = 8  //1 byte
-	Short    BasicType = 9  //2 bytes
-	Int      BasicType = 10 //4 bytes
-	Long     BasicType = 11 //8 bytes
-)
-
-func (bt BasicType) GetSize() int32 {
-	switch bt {
-	case Boolean, Byte:
-		return 1
-	case Short, Char:
-		return 2
-	case Float, Int:
-		return 4
-	case Double, Long, Object:
-		return 8
-	}
-	return 0
-}
-
-func (bt BasicType) GetName() string {
-	switch bt {
-	case Boolean:
-		return "bool"
-	case Char:
-		return "char"
-	case Float:
-		return "float"
-	case Double:
-		return "double"
-	case Byte:
-		return "byte"
-	case Short:
-		return "short"
-	case Int:
-		return "int"
-	case Long:
-		return "long"
-	case Object:
-		return "object"
-	}
-	return "unknown"
-}
-
-type ID int64 // depends on the identifier size, but we will use int64 for now
-
-// 0x01
-type StringInUTF8 struct {
-	StringId ID
-	Bytes    []byte
-}
-
-// 0x02
-type LoadClass struct {
-	ClassSerialNumber      int32
-	ClassObjectId          ID
-	StackTraceSerialNumber int32
-	ClassNameStringId      ID
-}
-
-// 0x03
-type UnloadClass struct {
-	ClassSerialNumber int32
-}
-
-// 0x04
-type StackFrame struct {
-	FrameId                 ID
-	MethodId                ID
-	MethodSignatureStringId ID
-	SourceFileNameStringId  ID
-	ClassSerialNumber       int32
-	// > 0 line number
-	// 0 no line information
-	// -1 unknown location
-	// -2 compiled method
-	// -3 native method
-	flag int32
-}
-
-// 0x05
-type StackTrace struct {
-	StackTraceSerialNumber int32
-	ThreadSerialNumber     int32
-	NumberOfFrames         int32
-	FramesID               []ID
-}
-
-// 0x06
-type AllocSites struct {
-	// 0x1 incremental / complete
-	// 0x2 sorted by allocation / line
-	// 0x4 whether to force GC
-	BitMaskSize            uint16
-	CutoffRatio            int32
-	TotalLiveBytes         int32
-	TotalLiveInstances     int32
-	TotalBytesAllocated    int64
-	TotalInstanceAllocated int64
-	NumberOfSites          int32
-	Sites                  []Site
-}
-
-type Site struct {
-	ArrayIndicator             BasicType
-	ClassSerialNumber          int32
-	StackTraceSerialNumber     int32
-	NumberOfLiveBytes          int32
-	NumberOfLiveInstances      int32
-	NumberOfBytesAllocated     int32
-	NumberOfInstancesAllocated int32
-}
-
-// 0x07
-type HeapSummary struct {
-	LiveBytes          int32
-	LiveInstances      int32
-	BytesAllocated     int64
-	InstancesAllocated int64
-}
-
-// 0x0A
-type StartThread struct {
-	ThreadSerialNumber      int32
-	ThreadObjectId          ID
-	StackTraceSerialNumber  int32
-	ThreadNameStringId      ID
-	ThreadGroupNameId       ID
-	ThreadParentGroupNameId ID
-}
-
-// 0x0B
-type EndThread struct {
-	ThreadSerialNumber int32
-}
-
-// 0x0C or 0x1C
-type HeapDump struct {
-	data []byte
-}
-
-// 0x0D
-type CPUSamples struct {
-	TotalNumberOfSamples int32
-	NumberOfTraces       int32
-	Traces               []struct {
-		NumberOfSamples        int32
-		StackTraceSerialNumber int32
-	}
-}
-
-// 0x0E
-type ControlSettings struct {
-	// 0x1 alloc traces on/off
-	// 0x2 cpu sampling on/off
-	BitMask         int32
-	StackTraceDepth uint16
-}
-
-// subtypes in heap dump
-
-type HeapDumpSubTag byte
-
-const (
-	RootUnknownTag        HeapDumpSubTag = 0xFF
-	RootJNIGlobalTag      HeapDumpSubTag = 0x01
-	RootJNILocalTag       HeapDumpSubTag = 0x02
-	RootJavaFrameTag      HeapDumpSubTag = 0x03
-	RootNativeStackTag    HeapDumpSubTag = 0x04
-	RootStickyClassTag    HeapDumpSubTag = 0x05
-	RootThreadBlockTag    HeapDumpSubTag = 0x06
-	RootMonitorUsedTag    HeapDumpSubTag = 0x07
-	RootThreadObjectTag   HeapDumpSubTag = 0x08
-	ClassDumpTag          HeapDumpSubTag = 0x20
-	InstanceDumpTag       HeapDumpSubTag = 0x21
-	ObjectArrayDumpTag    HeapDumpSubTag = 0x22
-	PrimitiveArrayDumpTag HeapDumpSubTag = 0x23
-)
-
-func (hdst HeapDumpSubTag) String() string {
-	switch hdst {
-	case RootUnknownTag:
-		return "RootUnknown"
-	case RootJNIGlobalTag:
-		return "RootJNIGlobal"
-	case RootJNILocalTag:
-		return "RootJNILocal"
-	case RootJavaFrameTag:
-		return "RootJavaFrame"
-	case RootNativeStackTag:
-		return "RootNativeStack"
-	case RootStickyClassTag:
-		return "RootStickyClass"
-	case RootThreadBlockTag:
-		return "RootThreadBlock"
-	case RootMonitorUsedTag:
-		return "RootMonitorUsed"
-	case RootThreadObjectTag:
-		return "RootThreadObject"
-	case ClassDumpTag:
-		return "ClassDump"
-	case InstanceDumpTag:
-		return "InstanceDump"
-	case ObjectArrayDumpTag:
-		return "ObjectArrayDump"
-	case PrimitiveArrayDumpTag:
-		return "PrimitiveArrayDump"
-	}
-	return "Unknown"
-}
-
-// 0xFF
-type RootUnknown struct {
-	ObjectId ID
-}
-
-// 0x01
-type RootJNIGlobal struct {
-	ObjectId ID
-	JNIRef   ID
-}
-
-// 0x02
-type RootJNILocal struct {
-	ObjectId           ID
-	ThreadSerialNumber int32
-	FrameNumber        int32 // -1 for empty
-}
-
-// 0x03
-type RootJavaFrame struct {
-	ObjectId           ID
-	ThreadSerialNumber int32
-	FrameNumber        int32 // -1 for empty
-}
-
-// 0x04
-type RootNativeStack struct {
-	ObjectId           ID
-	ThreadSerialNumber int32
-}
-
-// 0x05
-type RootStickyClass struct {
-	ObjectId ID
-}
-
-// 0x06
-type RootThreadBlock struct {
-	ObjectId           ID
-	ThreadSerialNumber int32
-}
-
-// 0x07
-type RootMonitorUsed struct {
-	ObjectId ID
-}
-
-// 0x08
-type RootThreadObject struct {
-	ObjectId               ID
-	ThreadSerialNumber     int32
-	StackTraceSerialNumber int32
-}
-
-// 0x20
-type ClassDump struct {
-	ClassObjectId            ID
-	StackTraceSerialNumber   int32
-	SuperClassObjectId       ID
-	ClassLoaderObjectId      ID
-	SignersObjectId          ID
-	ProtectionDomainObjectId ID
-	reserved_1               ID
-	reserved_2               ID
-	InstanceSize             int32 //in bytes
-	ConstantPoolSize         uint16
-	ConstantPool             []ConstantPoolRecord
-	NumberOfStaticFields     uint16
-	StaticFields             []StaticFieldRecord
-	NumberOfInstanceFields   uint16
-	InstanceFields           []InstanceFieldRecord
-}
-
-type ConstantPoolRecord struct {
-	ConstantPoolIndex uint16
-	Type              BasicType
-	Value             []byte //size depends on the type
-}
-
-type StaticFieldRecord struct {
-	StaticFieldNameStringId ID
-	Type                    BasicType
-	Value                   []byte //size depends on the type
-}
-
-type InstanceFieldRecord struct {
-	FieldNameStringId ID
-	Type              BasicType
-}
-
-// 0x21
-type InstanceDump struct {
-	ObjectId               ID
-	StackTraceSerialNumber int32
-	ClassObjectId          ID
-	NumberOfBytes          int32
-	InstanceFieldValues    []byte
-}
-
-// 0x22
-type ObjectArrayDump struct {
-	ArrayObjectId          ID
-	StackTraceSerialNumber int32
-	NumberOfElements       int32
-	ArrayClassObjectId     ID
-	Elements               []ID
-}
-
-// 0x23
-type PrimitiveArrayDump struct {
-	ArrayObjectId          ID
-	StackTraceSerialNumber int32
-	NumberOfElements       int32
-	ElementType            BasicType
-	Elements               []byte
-}
-
 func readID(reader *bytes.Reader) ID {
 	var id ID
 	binary.Read(reader, binary.BigEndian, &id)
@@ -858,16 +497,40 @@ func ParseHeapDump(heapDumpFile *os.File) {
 			}
 		}
 	}
-
-	printSizeClasses(15)
-	printCountInstances(15)
-	printObjectLoadersInfo(15)
-	printFullClassSize(15)
-	printArrayInfo(15)
 }
 
-func printSizeClasses(max int) {
-	fmt.Printf("\n\nTop %d classes by instance size\n", max)
+type AnalyzeResult struct {
+	Header string
+	Body   []string
+}
+
+func (result AnalyzeResult) Print() {
+	fmt.Println("==================================================")
+	fmt.Print(result.Header)
+	for _, line := range result.Body {
+		fmt.Print(line)
+	}
+	fmt.Println("==================================================")
+}
+
+func (result AnalyzeResult) ToHTML() string {
+	var buf bytes.Buffer
+	buf.WriteString("<h1>" + result.Header + "</h1>")
+	buf.WriteString("<ul>")
+	for _, line := range result.Body {
+		buf.WriteString("<li>" + line + "</li>")
+	}
+	buf.WriteString("</ul>")
+	return buf.String()
+}
+	
+
+func PrintSizeClasses(max int) (result AnalyzeResult) {
+	result = AnalyzeResult{
+		Header: fmt.Sprintf("\n\nTop %d classes by size\n", max), 
+		Body:   make([]string, max),
+	}
+
 	type IdSize struct {
 		id   ID
 		size int64
@@ -886,12 +549,17 @@ func printSizeClasses(max int) {
 		if i == max {
 			break
 		}
-		fmt.Printf("%d. Class ID: %d, Size: %d, Name: %s\n", (i + 1), p.id, p.size, IDtoStringInUTF8[ClassObjectIdToClassNameID[p.id]])
+		result.Body[i] = fmt.Sprintf("%d. Class ID: %d, Size: %d, Name: %s\n", (i + 1), p.id, p.size, IDtoStringInUTF8[ClassObjectIdToClassNameID[p.id]])
 	}
+
+	return result
 }
 
-func printCountInstances(max int) {
-	fmt.Printf("\n\nTop %d classes by instance count\n", max)
+func PrintCountInstances(max int) (result AnalyzeResult) {
+	result = AnalyzeResult{
+		Header: fmt.Sprintf("\n\nTop %d classes by instance count\n", max), 
+		Body:   make([]string, max),
+	}
 	type IdCount struct {
 		id    ID
 		count int32
@@ -910,11 +578,17 @@ func printCountInstances(max int) {
 		if i == max {
 			break
 		}
-		fmt.Printf("%d. Class ID: %d, Count: %d, Name: %s\n", (i + 1), p.id, p.count, IDtoStringInUTF8[ClassObjectIdToClassNameID[p.id]])
+		result.Body[i] = fmt.Sprintf("%d. Class ID: %d, Count: %d, Name: %s\n", (i + 1), p.id, p.count, IDtoStringInUTF8[ClassObjectIdToClassNameID[p.id]])
 	}
+	return result
 }
 
-func printObjectLoadersInfo(max int) {
+func PrintObjectLoadersInfo(max int) (result AnalyzeResult) {
+	result = AnalyzeResult{
+		Header: "\n\nObject loaders info\n",
+		Body:   make([]string, 0),
+	}
+
 	loaderObjectsMap := make(map[ID]([]ID))
 	for object, loader := range IDtoClassLoaderID {
 		loaderObjectsMap[loader] = append(loaderObjectsMap[loader], object)
@@ -926,21 +600,25 @@ func printObjectLoadersInfo(max int) {
 		if loader == 0 {
 			loaderName = "Bootstrap ClassLoader (System)"
 		}
-		fmt.Printf("Loader ID: %d, Name: %s, Number of objects: %d\n", loader, loaderName, len(classes))
+		result.Body = append(result.Body, fmt.Sprintf("Loader ID: %d, Name: %s, Number of objects: %d\n", loader, loaderName, len(classes)))
 		for i, obj := range classes {
 			if i == max {
-				fmt.Printf("\t\t...\n")
+				result.Body = append(result.Body, "\t\t...\n")
 				break
 			}
-			fmt.Printf("\t\tClass ID: %d, Name: %s\n", obj, getNameByClassObjectId(obj))
+			result.Body = append(result.Body, fmt.Sprintf("\t\tClass ID: %d, Name: %s\n", obj, getNameByClassObjectId(obj)))
 		}
 	}
+	return result
 }
 
-func printFullClassSize(max int) {
-	classStatsMap := CalculateClassSizes()
+func PrintFullClassSize(max int) (result AnalyzeResult) {
+	result = AnalyzeResult{
+		Header: fmt.Sprintf("\n\nTop %d classes by full size (with all depends object)\n", max),
+		Body:   make([]string, max),
+	}
 
-	fmt.Printf("\n\nTop %d classes by full size (with all depends object)\n", max)
+	classStatsMap := CalculateClassSizes()
 
 	type IdStats struct {
 		id   ID
@@ -960,11 +638,16 @@ func printFullClassSize(max int) {
 		if i == max {
 			break
 		}
-		fmt.Printf("%d. Class ID: %d, Size: %d, Name: %s\n", (i + 1), p.id, p.stat.TotalSize, p.stat.ClassName)
+		result.Body[i] = fmt.Sprintf("%d. Class ID: %d, Size: %d, Name: %s\n", (i + 1), p.id, p.stat.TotalSize, p.stat.ClassName)
 	}
+	return result
 }
 
-func printArrayInfo(max int) {
+func PrintArrayInfo(max int) (result AnalyzeResult) {
+	result = AnalyzeResult{
+		Header: fmt.Sprintf("\n\nTop %d arrays by size\n", max),
+		Body:   make([]string, max),
+	}
 	type nameSize struct {
 		name string
 		size int32
@@ -991,13 +674,13 @@ func printArrayInfo(max int) {
 		return pairs[i].size > pairs[j].size
 	})
 
-	fmt.Printf("\n\nTop %d arrays by size\n", max)
 	for i, p := range pairs {
 		if i == max {
 			break
 		}
-		fmt.Printf("%d. Array: %s, Size: %d\n", (i + 1), p.name, p.size)
+		result.Body[i] = fmt.Sprintf("%d. Array: %s, Size: %d\n", (i + 1), p.name, p.size)
 	}
+	return result
 }
 
 func getNameByClassObjectId(id ID) string {
