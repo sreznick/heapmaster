@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/sreznick/heapmaster/cmd/hdump/cmd"
+	"github.com/sreznick/heapmaster/cmd/hdump/web"
 )
 
 func main() {
@@ -40,4 +42,11 @@ func main() {
 			}
 		}
 	*/
+	args := os.Args[1:]
+	fmt.Println(args)
+	if (len(args) >= 1 && args[0] == "web") {
+		web.Execute()
+		return
+	} 
+	cmd.Execute()
 }

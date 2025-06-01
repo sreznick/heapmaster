@@ -44,6 +44,9 @@ var commands = []command{
 		{3, "Print object loaders info", "Enter max count of loaders to print: ", hprof.PrintObjectLoadersInfo},
 		{4, "Print full class size", "Enter max count of classes to print: ", hprof.PrintFullClassSize},
 		{5, "Print array info", "Enter max count of arrays to print: ", hprof.PrintArrayInfo},
+		{6, "Analyze long arrays", "Enter min size of array: ", hprof.AnalyzeLongArrays},
+		{7, "Analyze HashMap overheads", "Enter max count of HashMap: ", hprof.AnalyzeHashMapOverheads},
+		{8, "Analyze duplicate strings", nil, hprof.AnalyzeDuplicateStrings},
 	}
 
 func getDiscription() string {
