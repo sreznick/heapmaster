@@ -1,5 +1,7 @@
 package hprof
 
+import "io"
+
 type Tag uint8
 
 const (
@@ -30,7 +32,7 @@ type HprofRecord struct {
 	Tag    Tag
 	Time   int32
 	Length int32
-	Data   []byte
+	DataReader io.Reader 
 }
 
 // 0 for non-array,
@@ -98,73 +100,6 @@ func (bt BasicType) GetName() string {
 
 type ID int64 // depends on the identifier size, but we will use int64 for now
 
-// 0x01
-type StringInUTF8 struct {
-	StringId ID
-	Bytes    []byte
-}
-
-// 0x02
-type LoadClass struct {
-	ClassSerialNumber      int32
-	ClassObjectId          ID
-	StackTraceSerialNumber int32
-	ClassNameStringId      ID
-}
-
-// 0x03
-type UnloadClass struct {
-	ClassSerialNumber int32
-}
-
-// 0x04
-type StackFrame struct {
-	FrameId                 ID
-	MethodId                ID
-	MethodSignatureStringId ID
-	SourceFileNameStringId  ID
-	ClassSerialNumber       int32
-	// > 0 line number
-	// 0 no line information
-	// -1 unknown location
-	// -2 compiled method
-	// -3 native method
-	flag int32
-}
-
-// 0x05
-type StackTrace struct {
-	StackTraceSerialNumber int32
-	ThreadSerialNumber     int32
-	NumberOfFrames         int32
-	FramesID               []ID
-}
-
-// 0x06
-type AllocSites struct {
-	// 0x1 incremental / complete
-	// 0x2 sorted by allocation / line
-	// 0x4 whether to force GC
-	BitMaskSize            uint16
-	CutoffRatio            int32
-	TotalLiveBytes         int32
-	TotalLiveInstances     int32
-	TotalBytesAllocated    int64
-	TotalInstanceAllocated int64
-	NumberOfSites          int32
-	Sites                  []Site
-}
-
-type Site struct {
-	ArrayIndicator             BasicType
-	ClassSerialNumber          int32
-	StackTraceSerialNumber     int32
-	NumberOfLiveBytes          int32
-	NumberOfLiveInstances      int32
-	NumberOfBytesAllocated     int32
-	NumberOfInstancesAllocated int32
-}
-
 // 0x07
 type HeapSummary struct {
 	LiveBytes          int32
@@ -189,9 +124,9 @@ type EndThread struct {
 }
 
 // 0x0C or 0x1C
-type HeapDump struct {
-	data []byte
-}
+// type HeapDump struct {
+// 	data []byte
+// }
 
 // 0x0D
 type CPUSamples struct {
@@ -263,119 +198,306 @@ func (hdst HeapDumpSubTag) String() string {
 	return "Unknown"
 }
 
+
+// Model definitions
+
+// 0x01
+type StringInUTF8 struct {
+	StringID ID   `gorm:"primaryKey;column:StringID"`
+	Bytes    []byte `gorm:"column:Bytes"`
+}
+
+func (StringInUTF8) TableName() string { return "StringInUTF8" }
+
+// 0x02
+type LoadClass struct {
+	ID                     ID   `gorm:"primaryKey;column:ID"`
+	ClassSerialNumber      int32    `gorm:"column:ClassSerialNumber"`
+	StackTraceSerialNumber int32    `gorm:"column:StackTraceSerialNumber"`
+	ClassNameStringID      ID   `gorm:"column:ClassNameStringID"`
+
+	ClassObject            ClassDump   `gorm:"foreignKey:ID"`
+	StackTrace             StackTrace  `gorm:"foreignKey:StackTraceSerialNumber"`
+	ClassNameString        StringInUTF8 `gorm:"foreignKey:ClassNameStringID"`
+}
+
+func (LoadClass) TableName() string { return "LoadClass" }
+
+// 0x03
+type UnloadClass struct {
+	ID                uint64 `gorm:"primaryKey;column:ID;autoIncrement"`
+	ClassSerialNumber int32  `gorm:"column:ClassSerialNumber"`
+}
+
+func (UnloadClass) TableName() string { return "UnloadClass" }
+
+// 0x04
+type StackFrame struct {
+	ID                       ID   `gorm:"primaryKey;column:ID"`
+	MethodNameStringID       ID   `gorm:"column:MethodNameStringID"`
+	MethodSignatureStringID  ID  `gorm:"column:MethodSignatureStringID"`
+	SourceFileNameStringID   ID   `gorm:"column:SourceFileNameStringID"`
+	ClassSerialNumber        int32    `gorm:"column:ClassSerialNumber"`
+	// > 0 line number
+	// 0 no line information
+	// -1 unknown location
+	// -2 compiled method
+	// -3 native method
+	Flag                     int32    `gorm:"column:Flag"`
+	
+	StackTraceSerialNumber   int32   `gorm:"column:StackTraceSerialNumber"`
+
+	MethodNameString         StringInUTF8 `gorm:"foreignKey:MethodNameStringID"`
+	MethodSignatureString    StringInUTF8 `gorm:"foreignKey:MethodSignatureStringID"`
+	SourceFileNameString     StringInUTF8 `gorm:"foreignKey:SourceFileNameStringID"`
+	StackTrace               StackTrace   `gorm:"foreignKey:StackTraceSerialNumber"`
+}
+
+func (StackFrame) TableName() string { return "StackFrame" }
+
+// 0x05
+type StackTrace struct {
+	StackTraceSerialNumber int32 `gorm:"primaryKey;column:StackTraceSerialNumber"`
+	ThreadSerialNumber     int32  `gorm:"column:ThreadSerialNumber"`
+}
+
+func (StackTrace) TableName() string { return "StackTrace" }
+
+// 0x06
+type AllocSites struct {
+	ID                    ID `gorm:"primaryKey;column:ID;autoIncrement"`
+	// 0x1 incremental / complete
+	// 0x2 sorted by allocation / line
+	// 0x4 whether to force GC
+	BitMaskSize           uint16  `gorm:"column:BitMaskSize"`
+	CutoffRatio           int32  `gorm:"column:CutoffRatio"`
+	TotalLiveBytes        int32  `gorm:"column:TotalLiveBytes"`
+	TotalLiveInstances    int32  `gorm:"column:TotalLiveInstances"`
+	TotalBytesAllocated   int64  `gorm:"column:TotalBytesAllocated"`
+	TotalInstanceAllocated int64 `gorm:"column:TotalInstanceAllocated"`
+}
+
+func (AllocSites) TableName() string { return "AllocSites" }
+
+type Site struct {
+	ID                      ID       `gorm:"primaryKey;column:ID;autoIncrement"`
+	AllocSitesID            ID       `gorm:"column:AllocSitesID"`
+	ArrayIndicator          BasicType       `gorm:"column:ArrayIndicator"`
+	ClassSerialNumber       int32        `gorm:"column:ClassSerialNumber"`
+	StackTraceSerialNumber  int32       `gorm:"column:StackTraceSerialNumber"`
+	NumberOfLiveBytes       int32        `gorm:"column:NumberOfLiveBytes"`
+	NumberOfLiveInstances   int32        `gorm:"column:NumberOfLiveInstances"`
+	NumberOfBytesAllocated  int32        `gorm:"column:NumberOfBytesAllocated"`
+	NumberOfInstancesAllocated int32      `gorm:"column:NumberOfInstancesAllocated"`
+
+	AllocSites              AllocSites  `gorm:"foreignKey:AllocSitesID"`
+	StackTrace              StackTrace  `gorm:"foreignKey:StackTraceSerialNumber"`
+}
+
+func (Site) TableName() string { return "Site" }
+
+// Heap Dump Segment roots
+
 // 0xFF
 type RootUnknown struct {
-	ObjectId ID
+	ID ID `gorm:"primaryKey;column:ID"`
 }
+
+func (RootUnknown) TableName() string { return "RootUnknown" }
 
 // 0x01
 type RootJNIGlobal struct {
-	ObjectId ID
-	JNIRef   ID
+	ID           ID   `gorm:"primaryKey;column:ID"`
+	JNIGlobalRef ID `gorm:"column:JNIGlobalRef"`
 }
+
+func (RootJNIGlobal) TableName() string { return "RootJNIGlobal" }
 
 // 0x02
 type RootJNILocal struct {
-	ObjectId           ID
-	ThreadSerialNumber int32
-	FrameNumber        int32 // -1 for empty
+	ID                    ID `gorm:"primaryKey;column:ID"`
+	ThreadSerialNumber    int32  `gorm:"column:ThreadSerialNumber"`
+	FrameNumberInStackTrace int32 `gorm:"column:FrameNumberInStackTrace"`
 }
+
+func (RootJNILocal) TableName() string { return "RootJNILocal" }
 
 // 0x03
 type RootJavaFrame struct {
-	ObjectId           ID
-	ThreadSerialNumber int32
-	FrameNumber        int32 // -1 for empty
+	ID                    ID `gorm:"primaryKey;column:ID"`
+	ThreadSerialNumber    int32  `gorm:"column:ThreadSerialNumber"`
+	FrameNumberInStackTrace int32 `gorm:"column:FrameNumberInStackTrace"`
 }
+
+func (RootJavaFrame) TableName() string { return "RootJavaFrame" }
 
 // 0x04
 type RootNativeStack struct {
-	ObjectId           ID
-	ThreadSerialNumber int32
+	ID                 ID `gorm:"primaryKey;column:ID"`
+	ThreadSerialNumber int32  `gorm:"column:ThreadSerialNumber"`
 }
+
+func (RootNativeStack) TableName() string { return "RootNativaStack" }
 
 // 0x05
 type RootStickyClass struct {
-	ObjectId ID
+	ID ID `gorm:"primaryKey;column:ID"`
 }
+
+func (RootStickyClass) TableName() string { return "RootStickyClass" }
 
 // 0x06
 type RootThreadBlock struct {
-	ObjectId           ID
-	ThreadSerialNumber int32
+	ID                 ID `gorm:"primaryKey;column:ID"`
+	ThreadSerialNumber int32  `gorm:"column:ThreadSerialNumber"`
 }
+
+func (RootThreadBlock) TableName() string { return "RootThreadBlock" }
 
 // 0x07
 type RootMonitorUsed struct {
-	ObjectId ID
+	ID ID `gorm:"primaryKey;column:ID"`
 }
+
+func (RootMonitorUsed) TableName() string { return "RootMonitorUsed" }
 
 // 0x08
 type RootThreadObject struct {
-	ObjectId               ID
-	ThreadSerialNumber     int32
-	StackTraceSerialNumber int32
+	ID                    ID `gorm:"primaryKey;column:ID"`
+	ThreadSerialNumber    int32  `gorm:"column:ThreadSerialNumber"`
+	StackTraceSerialNumber int32 `gorm:"column:StackTraceSerialNumber"`
+
+	StackTrace            StackTrace `gorm:"foreignKey:StackTraceSerialNumber"`
 }
+
+func (RootThreadObject) TableName() string { return "RootThreadObject" }
 
 // 0x20
 type ClassDump struct {
-	ClassObjectId            ID
-	StackTraceSerialNumber   int32
-	SuperClassObjectId       ID
-	ClassLoaderObjectId      ID
-	SignersObjectId          ID
-	ProtectionDomainObjectId ID
-	reserved_1               ID
-	reserved_2               ID
-	InstanceSize             int32 //in bytes
-	ConstantPoolSize         uint16
-	ConstantPool             []ConstantPoolRecord
-	NumberOfStaticFields     uint16
-	StaticFields             []StaticFieldRecord
-	NumberOfInstanceFields   uint16
-	InstanceFields           []InstanceFieldRecord
+	ID                      ID `gorm:"primaryKey;column:ID"`
+	StackTraceSerialNumber  int32 `gorm:"column:StackTraceSerialNumber"`
+	SuperClassObjectID      ID `gorm:"column:SuperClassObjectID"`
+	ClassLoaderObjectID     ID `gorm:"column:ClassLoaderObjectID"`
+	SignersObjectID         ID `gorm:"column:SignersObjectID"`
+	ProtectionDomainObjectID ID `gorm:"column:ProtectionDomainObjectID"`
+	Reserved1               ID `gorm:"column:Reserved1"`
+	Reserved2               ID `gorm:"column:Reserved2"`
+	InstanceSize            int32  `gorm:"column:InstanceSize"`
+
+	StackTrace              StackTrace `gorm:"foreignKey:StackTraceSerialNumber"`
+	SuperClass              *ClassDump  `gorm:"foreignKey:SuperClassObjectID"`
+	ClassLoader             *ClassDump  `gorm:"foreignKey:ClassLoaderObjectID"`
 }
+
+func (ClassDump) TableName() string { return "ClassDump" }
 
 type ConstantPoolRecord struct {
-	ConstantPoolIndex uint16
-	Type              BasicType
-	Value             []byte //size depends on the type
+	ID             ID `gorm:"primaryKey;column:ID;autoIncrement"`
+	ClassDumpID    ID `gorm:"column:ClassDumpID"`
+	ConstantPoolIndex uint16 `gorm:"column:ConstantPoolIndex"`
+	Type           BasicType  `gorm:"column:Type"`
+	Value          []byte `gorm:"column:Value"`
+
+	ClassDump      ClassDump `gorm:"foreignKey:ClassDumpID"`
 }
+
+func (ConstantPoolRecord) TableName() string { return "ConstantPoolRecord" }
 
 type StaticFieldRecord struct {
-	StaticFieldNameStringId ID
-	Type                    BasicType
-	Value                   []byte //size depends on the type
+	ID                     ID `gorm:"primaryKey;column:ID;autoIncrement"`
+	ClassDumpID            ID `gorm:"column:ClassDumpID"`
+	StaticFieldNameStringID ID `gorm:"column:StaticFieldNameStringID"`
+	Type                   BasicType  `gorm:"column:Type"`
+	Value                  []byte `gorm:"column:Value"`
+
+	ClassDump              ClassDump   `gorm:"foreignKey:ClassDumpID"`
+	StaticFieldNameString  StringInUTF8 `gorm:"foreignKey:StaticFieldNameStringID"`
 }
 
+func (StaticFieldRecord) TableName() string { return "StaticFieldRecord" }
+
 type InstanceFieldRecord struct {
-	FieldNameStringId ID
-	Type              BasicType
+	ID                ID `gorm:"primaryKey;column:ID;autoIncrement"`
+	ClassDumpID       ID `gorm:"column:ClassDumpID"`
+	FieldNameStringID ID `gorm:"column:FieldNameStringID"`
+	Type              BasicType  `gorm:"column:Type"`
+
+	ClassDump         ClassDump   `gorm:"foreignKey:ClassDumpID"`
+	FieldNameString   StringInUTF8 `gorm:"foreignKey:FieldNameStringID"`
 }
+
+func (InstanceFieldRecord) TableName() string { return "InstanceFieldRecord" }
 
 // 0x21
 type InstanceDump struct {
-	ObjectId               ID
-	StackTraceSerialNumber int32
-	ClassObjectId          ID
-	NumberOfBytes          int32
-	InstanceFieldValues    []byte
+	ID                     ID `gorm:"primaryKey;column:ID"`
+	StackTraceSerialNumber int32 `gorm:"column:StackTraceSerialNumber"`
+	ClassObjectID          ID `gorm:"column:ClassObjectID"`
+	NumberOfBytes          int32 `gorm:"column:NumberOfBytes"`
+	Data 				[]byte `gorm:"column:Data"` // ATTENTION ClassDump should be used to decode this
+
+	StackTrace             StackTrace `gorm:"foreignKey:StackTraceSerialNumber"`
+	ClassObject            ClassDump   `gorm:"foreignKey:ClassObjectID"`
 }
+
+func (InstanceDump) TableName() string { return "InstanceDump" }
+
+type InstanceFieldValues struct {
+	ID               ID   `gorm:"primaryKey;column:ID;autoIncrement"`
+	InstanceDumpID   ID   `gorm:"column:InstanceDumpID"`
+	Index 		  	 int32  `gorm:"column:Index"` // This is the index of the field in the class dump
+	Type             BasicType    `gorm:"column:Type"`
+	Value            []byte `gorm:"column:Value"`
+
+	InstanceDump     InstanceDump `gorm:"foreignKey:InstanceDumpID"`
+}
+
+func (InstanceFieldValues) TableName() string { return "InstanceFieldValues" }
 
 // 0x22
 type ObjectArrayDump struct {
-	ArrayObjectId          ID
-	StackTraceSerialNumber int32
-	NumberOfElements       int32
-	ArrayClassObjectId     ID
-	Elements               []ID
+	ID                     ID `gorm:"primaryKey;column:ID"`
+	StackTraceSerialNumber int32 `gorm:"column:StackTraceSerialNumber"`
+	NumberOfElements       int32  `gorm:"column:NumberOfElements"`
+	ArrayClassObjectID     ID `gorm:"column:ArrayClassObjectID"`
+
+	StackTrace             StackTrace `gorm:"foreignKey:StackTraceSerialNumber"`
+	ArrayClassObject       ClassDump   `gorm:"foreignKey:ArrayClassObjectID"`
 }
+
+func (ObjectArrayDump) TableName() string { return "ObjectArrayDump" }
+
+type ObjectArrayElement struct {
+	ID                 ID `gorm:"primaryKey;column:ID;autoIncrement"`
+	ObjectArrayDumpID  ID `gorm:"column:ObjectArrayDumpID"`
+	Index              int32  `gorm:"column:Index"`
+	InstanceDumpID     ID `gorm:"column:InstanceDumpID"`
+
+	ObjectArrayDump    ObjectArrayDump `gorm:"foreignKey:ObjectArrayDumpID"`
+	InstanceDump       InstanceDump    `gorm:"foreignKey:InstanceDumpID"`
+}
+
+func (ObjectArrayElement) TableName() string { return "ObjectArrayElement" }
 
 // 0x23
 type PrimitiveArrayDump struct {
-	ArrayObjectId          ID
-	StackTraceSerialNumber int32
-	NumberOfElements       int32
-	ElementType            BasicType
-	Elements               []byte
+	ID                     ID `gorm:"primaryKey;column:ID"`
+	StackTraceSerialNumber int32 `gorm:"column:StackTraceSerialNumber"`
+	NumberOfElements       int32  `gorm:"column:NumberOfElements"`
+	Type                   BasicType  `gorm:"column:Type"`
+
+	StackTrace             StackTrace `gorm:"foreignKey:StackTraceSerialNumber"`
 }
+
+func (PrimitiveArrayDump) TableName() string { return "PrimitiveArrayDump" }
+
+type PrimitiveArrayElement struct {
+	ID                     ID `gorm:"primaryKey;column:ID;autoIncrement"`
+	PrimitiveArrayDumpID   ID `gorm:"column:PrimitiveArrayDumpID"`
+	Index                  int32  `gorm:"column:Index"`
+	Value                  []byte `gorm:"column:Value"`
+
+	PrimitiveArrayDump     PrimitiveArrayDump `gorm:"foreignKey:PrimitiveArrayDumpID"`
+}
+
+func (PrimitiveArrayElement) TableName() string { return "PrimitiveArrayElement" }

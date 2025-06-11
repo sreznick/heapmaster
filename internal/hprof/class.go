@@ -9,39 +9,39 @@ import (
 	"sort"
 )
 
-func readID(reader *bytes.Reader) ID {
+func readID(reader io.Reader) ID {
 	var id ID
 	binary.Read(reader, binary.BigEndian, &id)
 	return id
 }
 
-func readInt64(reader *bytes.Reader) uint64 {
-	var i uint64
+func readInt64(reader io.Reader) int64 {
+	var i int64
 	binary.Read(reader, binary.BigEndian, &i)
 	return i
 }
 
-func readInt32(reader *bytes.Reader) int32 {
+func readInt32(reader io.Reader) int32 {
 	var i int32
 	binary.Read(reader, binary.BigEndian, &i)
 	return i
 }
 
-func readUint16(reader *bytes.Reader) uint16 {
+func readUint16(reader io.Reader) uint16 {
 	var i uint16
 	binary.Read(reader, binary.BigEndian, &i)
 	return i
 }
 
-func readBasicType(reader *bytes.Reader) BasicType {
+func readBasicType(reader io.Reader) BasicType {
 	var bt BasicType
 	binary.Read(reader, binary.BigEndian, &bt)
 	return bt
 }
 
-func readArray(reader *bytes.Reader, size int32) []byte {
+func readArray(reader io.Reader, size int32) []byte {
 	data := make([]byte, size)
-	reader.Read(data)
+	io.ReadFull(reader, data)
 	return data
 }
 
@@ -97,102 +97,141 @@ func readRecord(file *os.File) (HprofRecord, error) {
 		return record, err
 	}
 
-	// Read the data based on the length
-	record.Data = make([]byte, record.Length)
-	if _, err := file.Read(record.Data); err != nil {
-		fmt.Errorf("Error reading data: %v\n", err)
-		return record, err
-	}
+	// Get reader for the data
+	record.DataReader = io.LimitReader(file, int64(record.Length))
 
 	return record, nil
 }
 
-func readLoadClass(data []byte) interface{} {
-	return LoadClass{
-		ClassSerialNumber:      int32(binary.BigEndian.Uint32(data[:4])),
-		ClassObjectId:          ID(binary.BigEndian.Uint64(data[4:12])),
-		StackTraceSerialNumber: int32(binary.BigEndian.Uint32(data[12:16])),
-		ClassNameStringId:      ID(binary.BigEndian.Uint64(data[16:24])),
+// Readers
+
+func readStringInUTF8(reader io.Reader) {
+	StringInUTF8 := StringInUTF8{
+		StringID: readID(reader),
+	}
+	
+	length := readInt32(reader);
+
+	StringInUTF8.Bytes = readArray(reader, length);
+
+	if err := SaveStringInUTF8(&StringInUTF8); err != nil {
+		fmt.Errorf("Error saving StringInUTF8 to database: %v\n", err)
 	}
 }
 
-func readUnloadClass(data []byte) interface{} {
-	return UnloadClass{
-		ClassSerialNumber: int32(binary.BigEndian.Uint32(data[:4])),
+func readLoadClass(reader io.Reader) {
+	loadClass := LoadClass{
+		ClassSerialNumber: readInt32(reader),
+		ID:                readID(reader),
+		StackTraceSerialNumber: readInt32(reader),
+		ClassNameStringID: readID(reader),
+	}
+
+	if err := SaveLoadClass(&loadClass); err != nil {
+		fmt.Errorf("Error saving LoadClass to database: %v\n", err)
 	}
 }
 
-func readStringInUTF8(data []byte) interface{} {
-	return StringInUTF8{
-		StringId: ID(binary.BigEndian.Uint64(data[:8])),
-		Bytes:    append([]byte(nil), data[8:]...),
+
+func readUnloadClass(reader io.Reader) {
+	unloadClass := UnloadClass{
+		ClassSerialNumber: readInt32(reader),
+	}
+
+	if err := SaveUnloadClass(&unloadClass); err != nil {
+		fmt.Errorf("Error saving UnloadClass to database: %v\n", err)
 	}
 }
 
-func readStackFrame(data []byte) interface{} {
-	return StackFrame{
-		FrameId:                 ID(binary.BigEndian.Uint64(data[:8])),
-		MethodId:                ID(binary.BigEndian.Uint64(data[8:16])),
-		MethodSignatureStringId: ID(binary.BigEndian.Uint64(data[16:24])),
-		SourceFileNameStringId:  ID(binary.BigEndian.Uint64(data[24:32])),
-		ClassSerialNumber:       int32(binary.BigEndian.Uint32(data[32:36])),
-		flag:                    int32(binary.BigEndian.Uint32(data[36:40])),
+func readStackFrame(reader io.Reader) {
+	stackFrame := StackFrame{
+		ID : readID(reader),
+		MethodNameStringID: readID(reader),
+		MethodSignatureStringID: readID(reader),
+		SourceFileNameStringID: readID(reader),
+		ClassSerialNumber: readInt32(reader),
+		Flag: readInt32(reader),
+	}
+
+	if err := SaveStackFrame(&stackFrame); err != nil {
+		fmt.Errorf("Error saving StackFrame to database: %v\n", err)
 	}
 }
 
-func readStackTrace(data []byte) interface{} {
+
+func readStackTrace(reader io.Reader) {
 	stackTrace := StackTrace{
-		StackTraceSerialNumber: int32(binary.BigEndian.Uint32(data[:4])),
-		ThreadSerialNumber:     int32(binary.BigEndian.Uint32(data[4:8])),
-		NumberOfFrames:         int32(binary.BigEndian.Uint32(data[8:12])),
+		StackTraceSerialNumber: readInt32(reader),
+		ThreadSerialNumber:     readInt32(reader),
+	}
+
+	framesCount := readInt32(reader)
+
+	if err := SaveStackTrace(&stackTrace); err != nil {
+		fmt.Errorf("Error saving StackTrace to database: %v\n", err)
+		return
 	}
 
 	// Read the frames ID
-	stackTrace.FramesID = make([]ID, stackTrace.NumberOfFrames)
-	for i := 0; i < int(stackTrace.NumberOfFrames); i++ {
-		stackTrace.FramesID[i] = ID(binary.BigEndian.Uint64(data[12+i*8 : 12+(i+1)*8]))
+	for i := int32(0); i < framesCount; i++ {
+		frameId := readID(reader)
+		
+		if err := GetDB().
+			Model(&StackFrame{}).
+			Where("ID = ?", frameId).
+			UpdateColumn("StackTraceSerialNumber", stackTrace.StackTraceSerialNumber).Error; err != nil {
+			fmt.Errorf("Error updating StackFrame with frame ID %d: %v\n", frameId, err)
+		}
 	}
-
-	return stackTrace
 }
 
-func readAllocSites(data []byte) interface{} {
+func readAllocSites(reader io.Reader) {
 	allocSites := AllocSites{
-		BitMaskSize:            uint16(binary.BigEndian.Uint16(data[:2])),
-		CutoffRatio:            int32(binary.BigEndian.Uint32(data[2:6])),
-		TotalLiveBytes:         int32(binary.BigEndian.Uint32(data[6:10])),
-		TotalLiveInstances:     int32(binary.BigEndian.Uint32(data[10:14])),
-		TotalBytesAllocated:    int64(binary.BigEndian.Uint64(data[14:22])),
-		TotalInstanceAllocated: int64(binary.BigEndian.Uint64(data[22:30])),
-		NumberOfSites:          int32(binary.BigEndian.Uint32(data[30:34])),
+		BitMaskSize: readUint16(reader),
+		CutoffRatio: readInt32(reader),
+		TotalLiveBytes:       readInt32(reader),
+		TotalLiveInstances:   readInt32(reader),
+		TotalBytesAllocated:  readInt64(reader),
+		TotalInstanceAllocated: readInt64(reader),
+	}
+
+	numberOfSites := readInt32(reader)
+
+	if err := SaveAllocSites(&allocSites); err != nil {
+		fmt.Errorf("Error saving AllocSites to database: %v\n", err)
+		return
 	}
 
 	// Read the sites
-	allocSites.Sites = make([]Site, allocSites.NumberOfSites)
-	for i := 0; i < int(allocSites.NumberOfSites); i++ {
+	for i := int32(0); i < numberOfSites; i++ {
 		site := Site{
-			ArrayIndicator:             BasicType(data[34+i*25]),
-			ClassSerialNumber:          int32(binary.BigEndian.Uint32(data[35+i*25 : 39+i*25])),
-			StackTraceSerialNumber:     int32(binary.BigEndian.Uint32(data[39+i*25 : 43+i*25])),
-			NumberOfLiveBytes:          int32(binary.BigEndian.Uint32(data[43+i*25 : 47+i*25])),
-			NumberOfLiveInstances:      int32(binary.BigEndian.Uint32(data[47+i*25 : 51+i*25])),
-			NumberOfBytesAllocated:     int32(binary.BigEndian.Uint32(data[51+i*25 : 55+i*25])),
-			NumberOfInstancesAllocated: int32(binary.BigEndian.Uint32(data[55+i*25 : 59+i*25])),
+			AllocSitesID: allocSites.ID,
+			ArrayIndicator: readBasicType(reader),
+			ClassSerialNumber: readInt32(reader),
+			StackTraceSerialNumber: readInt32(reader),
+			NumberOfLiveBytes:       readInt32(reader),
+			NumberOfLiveInstances:   readInt32(reader),
+			NumberOfBytesAllocated:  readInt32(reader),
+			NumberOfInstancesAllocated: readInt32(reader),
 		}
-		allocSites.Sites[i] = site
+
+		if err := SaveSite(&site); err != nil {
+			fmt.Errorf("Error saving Site to database: %v\n", err)
+			return
+		}
 	}
-
-	return allocSites
 }
 
-func readHeapDump(data []byte) HeapDump {
-	heapDump := HeapDump{}
 
-	heapDump.data = make([]byte, len(data))
-	copy(heapDump.data, data)
+// func readHeapDump(data []byte) HeapDump {
+// 	heapDump := HeapDump{}
 
-	return heapDump
-}
+// 	heapDump.data = make([]byte, len(data))
+// 	copy(heapDump.data, data)
+
+// 	return heapDump
+// }
+
 
 func readCPUSamples(data []byte) interface{} {
 	cpuSamples := CPUSamples{
@@ -220,188 +259,278 @@ func readControlSettings(data []byte) interface{} {
 	}
 }
 
-func readRootUnknown(reader *bytes.Reader) interface{} {
-	return RootUnknown{
-		ObjectId: readID(reader),
+func readRootUnknown(reader io.Reader) { 
+	rootUnknown := RootUnknown{
+		ID: readID(reader),
+	}
+
+	if err := SaveRootUnknown(&rootUnknown); err != nil {
+		fmt.Errorf("Error saving RootUnknown to database: %v\n", err)
 	}
 }
 
-func readRootJNIGlobal(reader *bytes.Reader) interface{} {
-	return RootJNIGlobal{
-		ObjectId: readID(reader),
-		JNIRef:   readID(reader),
+
+func readRootJNIGlobal(reader io.Reader) {
+	rootJNIGlobal := RootJNIGlobal{
+		ID: readID(reader),
+		JNIGlobalRef: readID(reader),
+	}
+
+	if err := SaveRootJNIGlobal(&rootJNIGlobal); err != nil {
+		fmt.Errorf("Error saving RootJNIGlobal to database: %v\n", err)
 	}
 }
 
-func readRootJNILocal(reader *bytes.Reader) interface{} {
-	return RootJNILocal{
-		ObjectId:           readID(reader),
+func readRootJNILocal(reader io.Reader) {
+	rootJNILocal := RootJNILocal{
+		ID: readID(reader),
 		ThreadSerialNumber: readInt32(reader),
-		FrameNumber:        readInt32(reader),
+		FrameNumberInStackTrace: readInt32(reader),
+	}
+
+	if err := SaveRootJNILocal(&rootJNILocal); err != nil {
+		fmt.Errorf("Error saving RootJNILocal to database: %v\n", err)
 	}
 }
 
-func readRootJavaFrame(reader *bytes.Reader) interface{} {
-	return RootJavaFrame{
-		ObjectId:           readID(reader),
+func readRootJavaFrame(reader io.Reader) {
+	rootJavaFrame := RootJavaFrame{
+		ID: readID(reader),
 		ThreadSerialNumber: readInt32(reader),
-		FrameNumber:        readInt32(reader),
+		FrameNumberInStackTrace: readInt32(reader),
+	}
+
+	if err := SaveRootJavaFrame(&rootJavaFrame); err != nil {
+		fmt.Errorf("Error saving RootJavaFrame to database: %v\n", err)
 	}
 }
 
-func readRootNativeStack(reader *bytes.Reader) interface{} {
-	return RootNativeStack{
-		ObjectId:           readID(reader),
-		ThreadSerialNumber: readInt32(reader),
-	}
-}
-
-func readRootStickyClass(reader *bytes.Reader) interface{} {
-	return RootStickyClass{
-		ObjectId: readID(reader),
-	}
-}
-
-func readRootThreadBlock(reader *bytes.Reader) interface{} {
-	return RootThreadBlock{
-		ObjectId:           readID(reader),
+func readRootNativeStack(reader io.Reader) {
+	rootNativeStack := RootNativeStack{
+		ID: readID(reader),
 		ThreadSerialNumber: readInt32(reader),
 	}
-}
 
-func readRootMonitorUsed(reader *bytes.Reader) interface{} {
-	return RootMonitorUsed{
-		ObjectId: readID(reader),
+	if err := SaveRootNativeStack(&rootNativeStack); err != nil {
+		fmt.Errorf("Error saving RootNativeStack to database: %v\n", err)
 	}
 }
 
-func readRootThreadObject(reader *bytes.Reader) interface{} {
-	return RootThreadObject{
-		ObjectId:               readID(reader),
-		ThreadSerialNumber:     readInt32(reader),
+
+func readRootStickyClass(reader io.Reader) {
+	rootStickyClass := RootStickyClass{
+		ID: readID(reader),
+	}
+
+	if err := SaveRootStickyClass(&rootStickyClass); err != nil {
+		fmt.Errorf("Error saving RootStickyClass to database: %v\n", err)
+	}
+}
+
+func readRootThreadBlock(reader io.Reader) {
+	rootThreadBlock := RootThreadBlock{
+		ID: readID(reader),
+		ThreadSerialNumber: readInt32(reader),
+	}
+
+	if err := SaveRootThreadBlock(&rootThreadBlock); err != nil {
+		fmt.Errorf("Error saving RootThreadBlock to database: %v\n", err)
+	}
+}
+
+
+func readRootMonitorUsed(reader io.Reader) {
+	rootMonitorUsed := RootMonitorUsed{
+		ID: readID(reader),
+	}
+
+	if err := SaveRootMonitorUsed(&rootMonitorUsed); err != nil {
+		fmt.Errorf("Error saving RootMonitorUsed to database: %v\n", err)
+	}
+}
+
+
+func readRootThreadObject(reader io.Reader) {
+	rootThreadObject := RootThreadObject{
+		ID: readID(reader),
+		ThreadSerialNumber: readInt32(reader),
 		StackTraceSerialNumber: readInt32(reader),
 	}
+
+	if err := SaveRootThreadObject(&rootThreadObject); err != nil {
+		fmt.Errorf("Error saving RootThreadObject to database: %v\n", err)
+	}
 }
 
-func readClassDump(reader *bytes.Reader) interface{} {
+
+func readClassDump(reader io.Reader) {
 	classDump := ClassDump{
-		ClassObjectId:            readID(reader),
-		StackTraceSerialNumber:   readInt32(reader),
-		SuperClassObjectId:       readID(reader),
-		ClassLoaderObjectId:      readID(reader),
-		SignersObjectId:          readID(reader),
-		ProtectionDomainObjectId: readID(reader),
-		reserved_1:               readID(reader),
-		reserved_2:               readID(reader),
-		InstanceSize:             readInt32(reader),
+		ID: readID(reader),
+		StackTraceSerialNumber: readInt32(reader),
+		SuperClassObjectID: readID(reader),
+		ClassLoaderObjectID: readID(reader),
+		SignersObjectID: readID(reader),
+		ProtectionDomainObjectID: readID(reader),
+		Reserved1: readID(reader),
+		Reserved2: readID(reader),
+		InstanceSize: readInt32(reader),
+	}
+
+	if err := SaveClassDump(&classDump); err != nil {
+		fmt.Errorf("Error saving ClassDump to database: %v\n", err)
+		return
 	}
 
 	// Read the constant pool
-	classDump.ConstantPoolSize = readUint16(reader)
-	classDump.ConstantPool = make([]ConstantPoolRecord, classDump.ConstantPoolSize)
-	for i := 0; i < int(classDump.ConstantPoolSize); i++ {
+	constantPoolSize := readUint16(reader)
+	for i := 0; i < int(constantPoolSize); i++ {
 		constantPoolRecord := ConstantPoolRecord{
+			ClassDumpID: classDump.ID,
 			ConstantPoolIndex: readUint16(reader),
-			Type:              readBasicType(reader),
+			Type: readBasicType(reader),
 		}
+		
 		constantPoolRecord.Value = readArray(reader, constantPoolRecord.Type.GetSize())
-		classDump.ConstantPool[i] = constantPoolRecord
+
+		if err := SaveConstantPoolRecord(&constantPoolRecord); err != nil {
+			fmt.Errorf("Error saving ConstantPoolRecord to database: %v\n", err)
+			return
+		}
 	}
 
 	// Read the static fields
-	classDump.NumberOfStaticFields = readUint16(reader)
-	classDump.StaticFields = make([]StaticFieldRecord, classDump.NumberOfStaticFields)
-	for i := 0; i < int(classDump.NumberOfStaticFields); i++ {
+	numberOfStaticFields := readUint16(reader)
+	for i := 0; i < int(numberOfStaticFields); i++ {
 		staticFieldRecord := StaticFieldRecord{
-			StaticFieldNameStringId: readID(reader),
-			Type:                    readBasicType(reader),
+			ClassDumpID: classDump.ID,
+			StaticFieldNameStringID: readID(reader),
+			Type: readBasicType(reader),
 		}
-
+		
 		staticFieldRecord.Value = readArray(reader, staticFieldRecord.Type.GetSize())
-		classDump.StaticFields[i] = staticFieldRecord
+	
+		if err := SaveStaticFieldRecord(&staticFieldRecord); err != nil {
+			fmt.Errorf("Error saving StaticFieldRecord to database: %v\n", err)
+			return
+		}
 	}
+
 
 	// Read the instance fields
-	classDump.NumberOfInstanceFields = readUint16(reader)
-	classDump.InstanceFields = make([]InstanceFieldRecord, classDump.NumberOfInstanceFields)
-	for i := 0; i < int(classDump.NumberOfInstanceFields); i++ {
+	numberOfInstanceFields := readUint16(reader)
+	for i := 0; i < int(numberOfInstanceFields); i++ {
 		instanceFieldRecord := InstanceFieldRecord{
-			FieldNameStringId: readID(reader),
-			Type:              readBasicType(reader),
+			ClassDumpID: classDump.ID,
+			FieldNameStringID: readID(reader),
+			Type: readBasicType(reader),
 		}
-		classDump.InstanceFields[i] = instanceFieldRecord
+		
+		if err := SaveInstanceFieldRecord(&instanceFieldRecord); err != nil {
+			fmt.Errorf("Error saving InstanceFieldRecord to database: %v\n", err)
+			return
+		}
 	}
-
-	return classDump
 }
 
-func readInstanceDump(reader *bytes.Reader) interface{} {
+
+// After all we need to parse Data from InstanceDump, because we dont know the type of each value in Data. 
+// ClassDump.InstanceFileds will help us to understand the type of each value in Data.
+func readInstanceDump(reader io.Reader) {
 	instanceDump := InstanceDump{
-		ObjectId:               readID(reader),
+		ID: readID(reader),
 		StackTraceSerialNumber: readInt32(reader),
-		ClassObjectId:          readID(reader),
-		NumberOfBytes:          readInt32(reader),
+		ClassObjectID: readID(reader),
+		NumberOfBytes: readInt32(reader),
 	}
 
-	instanceDump.InstanceFieldValues = readArray(reader, instanceDump.NumberOfBytes)
+	instanceDump.Data = readArray(reader, instanceDump.NumberOfBytes)
 
-	return instanceDump
+	if err := SaveInstanceDump(&instanceDump); err != nil {
+		fmt.Errorf("Error saving InstanceDump to database: %v\n", err)
+		return
+	}
 }
 
-func readObjectArrayDump(reader *bytes.Reader) interface{} {
+
+func readObjectArrayDump(reader io.Reader) {
 	objectArrayDump := ObjectArrayDump{
-		ArrayObjectId:          readID(reader),
+		ID: readID(reader),
 		StackTraceSerialNumber: readInt32(reader),
-		NumberOfElements:       readInt32(reader),
-		ArrayClassObjectId:     readID(reader),
+		NumberOfElements: readInt32(reader),
+		ArrayClassObjectID: readID(reader),
 	}
 
-	objectArrayDump.Elements = make([]ID, objectArrayDump.NumberOfElements)
-	for i := 0; i < int(objectArrayDump.NumberOfElements); i++ {
-		objectArrayDump.Elements[i] = readID(reader)
+	if err := SaveObjectArrayDump(&objectArrayDump); err != nil {
+		fmt.Errorf("Error saving ObjectArrayDump to database: %v\n", err)
+		return
 	}
 
-	return objectArrayDump
+	for i := int32(0); i < objectArrayDump.NumberOfElements; i++ {
+		arrayElement := ObjectArrayElement{
+			ObjectArrayDumpID: objectArrayDump.ID,
+			Index: i,
+			InstanceDumpID: readID(reader),
+		}
+
+		if err := SaveObjectArrayElement(&arrayElement); err != nil {
+			fmt.Errorf("Error saving ObjectArrayElement to database: %v\n", err)
+			return
+		}
+	}
 }
 
-func readPrimitiveArrayDump(reader *bytes.Reader) interface{} {
+
+func readPrimitiveArrayDump(reader io.Reader) {
 	primitiveArrayDump := PrimitiveArrayDump{
-		ArrayObjectId:          readID(reader),
+		ID: readID(reader),
 		StackTraceSerialNumber: readInt32(reader),
-		NumberOfElements:       readInt32(reader),
-		ElementType:            readBasicType(reader),
+		NumberOfElements: readInt32(reader),
+		Type: readBasicType(reader),
 	}
 
-	primitiveArrayDump.Elements = readArray(
-		reader,
-		primitiveArrayDump.NumberOfElements*primitiveArrayDump.ElementType.GetSize(),
-	)
+	if err := SavePrimitiveArrayDump(&primitiveArrayDump); err != nil {
+		fmt.Errorf("Error saving PrimitiveArrayDump to database: %v\n", err)
+		return
+	}
 
-	return primitiveArrayDump
+	elementSize := primitiveArrayDump.Type.GetSize()
+	for i := int32(0); i < primitiveArrayDump.NumberOfElements; i++ {
+		element := PrimitiveArrayElement{
+			PrimitiveArrayDumpID: primitiveArrayDump.ID,
+			Index: i,
+		}
+
+		element.Value = readArray(reader, elementSize)
+
+		if err := SavePrimitiveArrayElement(&element); err != nil {
+			fmt.Errorf("Error saving PrimitiveArrayElement to database: %v\n", err)
+			return
+		}
+	}
+
 }
 
-var (
-	IDtoStringInUTF8                = make(map[ID]string)
-	IDtoSizeClassDump               = make(map[ID]int64)
-	ClassObjectIdToClassNameID      = make(map[ID]ID)
-	IDtoStackFrame                  = make(map[ID]StackFrame)
-	StackTraceIdToStackFrameIds     = make(map[int32][]ID)
-	ClassObjectIdToCountInstances   = make(map[ID]int32)
-	IDtoClassLoaderID               = make(map[ID]ID)
-	ObjectIdToInstanceDump          = make(map[ID]InstanceDump)
-	ObjectIdToInstanceDumpMap       = make(map[ID]InstanceDump)
-	ClassObjectIdToClassDumpMap     = make(map[ID]ClassDump)
-	ObjectIdToObjectArrayDumpMap    = make(map[ID]ObjectArrayDump)
-	ObjectIdToPrimitiveArrayDumpMap = make(map[ID]PrimitiveArrayDump)
-	StringUtf8Map                   = make(map[ID]StringInUTF8)
-	ClassObjectIdToLoadClassMap     = make(map[ID]LoadClass)
-)
+// var (
+// 	IDtoStringInUTF8                = make(map[ID]string)
+// 	IDtoSizeClassDump               = make(map[ID]int64)
+// 	ClassObjectIdToClassNameID      = make(map[ID]ID)
+// 	IDtoStackFrame                  = make(map[ID]StackFrame)
+// 	StackTraceIdToStackFrameIds     = make(map[int32][]ID)
+// 	ClassObjectIdToCountInstances   = make(map[ID]int32)
+// 	IDtoClassLoaderID               = make(map[ID]ID)
+// 	ObjectIdToInstanceDump          = make(map[ID]InstanceDump)
+// 	ObjectIdToInstanceDumpMap       = make(map[ID]InstanceDump)
+// 	ClassObjectIdToClassDumpMap     = make(map[ID]ClassDump)
+// 	ObjectIdToObjectArrayDumpMap    = make(map[ID]ObjectArrayDump)
+// 	ObjectIdToPrimitiveArrayDumpMap = make(map[ID]PrimitiveArrayDump)
+// 	StringUtf8Map                   = make(map[ID]StringInUTF8)
+// 	ClassObjectIdToLoadClassMap     = make(map[ID]LoadClass)
+// )
 
 const ArrayHeaderSize = int32(16)
 
 func ParseHeapDump(heapDumpFile *os.File) {
-
-	type readerFunction func(*bytes.Reader) interface{}
+	type readerFunction func(io.Reader)
 
 	subTagFuncMap := map[HeapDumpSubTag]readerFunction{
 		RootUnknownTag:        readRootUnknown,
@@ -436,28 +565,19 @@ func ParseHeapDump(heapDumpFile *os.File) {
 
 		switch record.Tag {
 		case StringUtf8Tag:
-			stringInUTF8 := readStringInUTF8(record.Data).(StringInUTF8)
-			IDtoStringInUTF8[stringInUTF8.StringId] = string(stringInUTF8.Bytes)
-			StringUtf8Map[stringInUTF8.StringId] = stringInUTF8
+			readStringInUTF8(record.DataReader)
 		case LoadClassTag:
-			loadClass := readLoadClass(record.Data).(LoadClass)
-			ClassObjectIdToClassNameID[loadClass.ClassObjectId] = loadClass.ClassNameStringId
-			ClassObjectIdToLoadClassMap[loadClass.ClassObjectId] = loadClass
+			readLoadClass(record.DataReader)
 		case UnloadClassTag:
-			unloadClass := readUnloadClass(record.Data).(UnloadClass)
-			_ = unloadClass
+			readUnloadClass(record.DataReader)
 		case StackFrameTag:
-			stackFrame := readStackFrame(record.Data).(StackFrame)
-			IDtoStackFrame[stackFrame.FrameId] = stackFrame
+			readStackFrame(record.DataReader)
 		case StackTraceTag:
-			stackTrace := readStackTrace(record.Data).(StackTrace)
-			StackTraceIdToStackFrameIds[stackTrace.StackTraceSerialNumber] = stackTrace.FramesID
+			readStackTrace(record.DataReader)
 		case AllocSitesTag:
-			allocSites := readAllocSites(record.Data).(AllocSites)
-			_ = allocSites
+			readAllocSites(record.DataReader)
 		case HeapDumpTag, HeapDumpSegmentTag:
-			heapDump := readHeapDump(record.Data)
-			reader := bytes.NewReader(heapDump.data)
+			reader := record.DataReader
 			for {
 				var subTag HeapDumpSubTag
 				err := binary.Read(reader, binary.BigEndian, &subTag)
@@ -470,26 +590,7 @@ func ParseHeapDump(heapDumpFile *os.File) {
 				}
 
 				if readerFunction, ok := subTagFuncMap[subTag]; ok {
-					switch subTag {
-					case InstanceDumpTag:
-						instanceDump := readerFunction(reader).(InstanceDump)
-						IDtoSizeClassDump[instanceDump.ClassObjectId] += int64(instanceDump.NumberOfBytes)
-						ClassObjectIdToCountInstances[instanceDump.ClassObjectId]++
-						ObjectIdToInstanceDumpMap[instanceDump.ObjectId] = instanceDump
-					case ClassDumpTag:
-						classDump := readerFunction(reader).(ClassDump)
-						IDtoSizeClassDump[classDump.ClassObjectId] += int64(classDump.InstanceSize)
-						IDtoClassLoaderID[classDump.ClassObjectId] = classDump.ClassLoaderObjectId
-						ClassObjectIdToClassDumpMap[classDump.ClassObjectId] = classDump
-					case ObjectArrayDumpTag:
-						objectArrayDump := readerFunction(reader).(ObjectArrayDump)
-						ObjectIdToObjectArrayDumpMap[objectArrayDump.ArrayObjectId] = objectArrayDump
-					case PrimitiveArrayDumpTag:
-						primitiveArrayDump := readerFunction(reader).(PrimitiveArrayDump)
-						ObjectIdToPrimitiveArrayDumpMap[primitiveArrayDump.ArrayObjectId] = primitiveArrayDump
-					default:
-						_ = readerFunction(reader)
-					}
+					readerFunction(reader)
 				} else {
 					fmt.Errorf("Unknown sub tag: %d\n", subTag)
 					break
