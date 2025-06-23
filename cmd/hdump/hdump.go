@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/sreznick/heapmaster/cmd/hdump/cmd"
-	"github.com/sreznick/heapmaster/cmd/hdump/web"
+	"github.com/sreznick/heapmaster/internal/hprof"
 )
 
 func main() {
@@ -44,9 +44,11 @@ func main() {
 	*/
 	args := os.Args[1:]
 	fmt.Println(args)
-	if (len(args) >= 1 && args[0] == "web") {
-		web.Execute()
-		return
-	} 
+
+	if err := hprof.InitDB(); err != nil {
+		fmt.Printf("Failed to initialize database: %v\n", err)
+		os.Exit(1)
+	}
+
 	cmd.Execute()
 }

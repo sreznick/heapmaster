@@ -34,7 +34,7 @@ func InitDB() error {
 	}
 
 	// Auto migrate all tables
-	if err := db.AutoMigrate(
+	tables := []interface{}{
 		&StringInUTF8{},
 		&LoadClass{},
 		&UnloadClass{},
@@ -61,8 +61,12 @@ func InitDB() error {
 		&ObjectArrayElement{},
 		&PrimitiveArrayDump{},
 		&PrimitiveArrayElement{},
-	); err != nil {
-		return fmt.Errorf("failed to migrate database schema: %w", err)
+	}
+
+	for _, table := range tables {
+		if err := db.AutoMigrate(table); err != nil {
+			return fmt.Errorf("failed to migrate table %T: %w", table, err)
+		}
 	}
 
 	log.Println("Database schema migrated successfully!")
@@ -71,6 +75,10 @@ func InitDB() error {
 
 func GetDB() *gorm.DB {
 	return db
+}
+
+func IsDBInitialized() bool {
+	return db != nil
 }
 
 func SaveStringInUTF8(s *StringInUTF8) error {
@@ -176,4 +184,3 @@ func SavePrimitiveArrayDump(pad *PrimitiveArrayDump) error {
 func SavePrimitiveArrayElement(pae *PrimitiveArrayElement) error {
 	return db.Create(pae).Error
 }
-
