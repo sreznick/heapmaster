@@ -46,7 +46,8 @@ var commands = []command{
 		{5, "Print array info", "Enter max count of arrays to print: ", hprof.PrintArrayInfo},
 		{6, "Analyze long arrays", "Enter min size of array: ", hprof.AnalyzeLongArrays},
 		{7, "Analyze HashMap overheads", "Enter max count of HashMap: ", hprof.AnalyzeHashMapOverheads},
-		{8, "Analyze duplicate strings", nil, hprof.AnalyzeDuplicateStrings},
+		{8, "Analyze array owners", "Enter min count of elements in array, witch owners need to print: ", hprof.AnalyzeArrayOwners},
+		{9, "Analyze top array owners", "Enter max count of array owners to print: ", hprof.AnalyzeTopArrayOwners},
 	}
 
 func getDiscription() string {
