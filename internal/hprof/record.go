@@ -10,6 +10,8 @@ import (
 type Tag uint8
 
 const (
+	Utf8         Tag = 1
+	TagLoadClass Tag = 2
 	StringUtf8Tag      Tag = 0x01
 	LoadClassTag       Tag = 0x02
 	UnloadClassTag     Tag = 0x03
@@ -64,6 +66,28 @@ func (r *RecordUtf8) Init(blob []byte) error {
 	id, _ := r.Record.ReadId(rdr)
 	r.Id = id
 	r.Value = string(blob[8:])
+	return nil
+}
+
+func (r *RecordLoadClass) Init(blob []byte) error {
+	rdr := bytes.NewReader(blob)
+	err := binary.Read(rdr, binary.BigEndian, &r.ClassSerial)
+	if err != nil {
+		return err
+	}
+	err = binary.Read(rdr, binary.BigEndian, &r.ObjectId)
+	if err != nil {
+		return err
+	}
+	err = binary.Read(rdr, binary.BigEndian, &r.StackTraceSerial)
+	if err != nil {
+		return err
+	}
+	err = binary.Read(rdr, binary.BigEndian, &r.NameId)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
