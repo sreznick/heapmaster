@@ -12,6 +12,20 @@ type Tag uint8
 const (
 	Utf8         Tag = 1
 	TagLoadClass Tag = 2
+	StringUtf8Tag      Tag = 0x01
+	LoadClassTag       Tag = 0x02
+	UnloadClassTag     Tag = 0x03
+	StackFrameTag      Tag = 0x04
+	StackTraceTag      Tag = 0x05
+	AllocSitesTag      Tag = 0x06
+	HeapSummaryTag     Tag = 0x07
+	StartThreadTag     Tag = 0x0A
+	EndThreadTag       Tag = 0x0B
+	HeapDumpTag        Tag = 0x0C
+	HeapDumpSegmentTag Tag = 0x1C
+	CPUSamplesTag      Tag = 0x0D
+	ControlSettingsTag Tag = 0x0E
+	HeapDumpEndTag     Tag = 0x2C
 )
 
 type Record struct {

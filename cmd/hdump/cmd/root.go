@@ -34,10 +34,10 @@ func Execute() {
 func dumpFile(name string) error {
 	fmt.Println("dump", name)
 	f, err := os.Open(os.Args[1])
-	defer f.Close()
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 	header, err := hprof.ReadHeader(f)
 	if err != nil {
 		return err
@@ -66,6 +66,5 @@ func dumpFile(name string) error {
 			fmt.Printf("  StackTraceSerial: %08X\n", lcRecord.StackTraceSerial)
 			fmt.Printf("  NameId: %016X\n", lcRecord.NameId)
 		}
-
 	}
 }
