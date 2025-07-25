@@ -7,402 +7,49 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 )
 
-type HprofHeader struct {
-	Magic          string
-	IdentifierSize int32
-	HighWord       int32
-	LowWord        int32
-}
-
-type HprofRecord struct {
-	Tag    Tag
-	Time   int32
-	Length int32
-	Data   []byte
-}
-
-// 0 for non-array,
-// 2 for object,
-// 4 for boolean,
-// 5 for char,
-// 6 for float,
-// 7 for double,
-// 8 for byte,
-// 9 for short,
-// 10 for int,
-// 11 for long
-type BasicType byte
-
-const (
-	NonArray BasicType = 0 //only in AllocSites, 0 means not an array, non-zero means an array of the given type
-	Object   BasicType = 2
-	Boolean  BasicType = 4  //1 byte
-	Char     BasicType = 5  //2 byte
-	Float    BasicType = 6  //4 bytes
-	Double   BasicType = 7  //8 bytes
-	Byte     BasicType = 8  //1 byte
-	Short    BasicType = 9  //2 bytes
-	Int      BasicType = 10 //4 bytes
-	Long     BasicType = 11 //8 bytes
-)
-
-func (bt BasicType) GetSize() int32 {
-	switch bt {
-	case Boolean, Byte:
-		return 1
-	case Short, Char:
-		return 2
-	case Float, Int:
-		return 4
-	case Double, Long, Object:
-		return 8
-	}
-	return 0
-}
-
-func (bt BasicType) GetName() string {
-	switch bt {
-	case Boolean:
-		return "bool"
-	case Char:
-		return "char"
-	case Float:
-		return "float"
-	case Double:
-		return "double"
-	case Byte:
-		return "byte"
-	case Short:
-		return "short"
-	case Int:
-		return "int"
-	case Long:
-		return "long"
-	case Object:
-		return "object"
-	}
-	return "unknown"
-}
-
-type ID int64 // depends on the identifier size, but we will use int64 for now
-
-// 0x01
-type StringInUTF8 struct {
-	StringId ID
-	Bytes    []byte
-}
-
-// 0x02
-type LoadClass struct {
-	ClassSerialNumber      int32
-	ClassObjectId          ID
-	StackTraceSerialNumber int32
-	ClassNameStringId      ID
-}
-
-// 0x03
-type UnloadClass struct {
-	ClassSerialNumber int32
-}
-
-// 0x04
-type StackFrame struct {
-	FrameId                 ID
-	MethodId                ID
-	MethodSignatureStringId ID
-	SourceFileNameStringId  ID
-	ClassSerialNumber       int32
-	// > 0 line number
-	// 0 no line information
-	// -1 unknown location
-	// -2 compiled method
-	// -3 native method
-	flag int32
-}
-
-// 0x05
-type StackTrace struct {
-	StackTraceSerialNumber int32
-	ThreadSerialNumber     int32
-	NumberOfFrames         int32
-	FramesID               []ID
-}
-
-// 0x06
-type AllocSites struct {
-	// 0x1 incremental / complete
-	// 0x2 sorted by allocation / line
-	// 0x4 whether to force GC
-	BitMaskSize            uint16
-	CutoffRatio            int32
-	TotalLiveBytes         int32
-	TotalLiveInstances     int32
-	TotalBytesAllocated    int64
-	TotalInstanceAllocated int64
-	NumberOfSites          int32
-	Sites                  []Site
-}
-
-type Site struct {
-	ArrayIndicator             BasicType
-	ClassSerialNumber          int32
-	StackTraceSerialNumber     int32
-	NumberOfLiveBytes          int32
-	NumberOfLiveInstances      int32
-	NumberOfBytesAllocated     int32
-	NumberOfInstancesAllocated int32
-}
-
-// 0x07
-type HeapSummary struct {
-	LiveBytes          int32
-	LiveInstances      int32
-	BytesAllocated     int64
-	InstancesAllocated int64
-}
-
-// 0x0A
-type StartThread struct {
-	ThreadSerialNumber      int32
-	ThreadObjectId          ID
-	StackTraceSerialNumber  int32
-	ThreadNameStringId      ID
-	ThreadGroupNameId       ID
-	ThreadParentGroupNameId ID
-}
-
-// 0x0B
-type EndThread struct {
-	ThreadSerialNumber int32
-}
-
-// 0x0C or 0x1C
-type HeapDump struct {
-	data []byte
-}
-
-// 0x0D
-type CPUSamples struct {
-	TotalNumberOfSamples int32
-	NumberOfTraces       int32
-	Traces               []struct {
-		NumberOfSamples        int32
-		StackTraceSerialNumber int32
-	}
-}
-
-// 0x0E
-type ControlSettings struct {
-	// 0x1 alloc traces on/off
-	// 0x2 cpu sampling on/off
-	BitMask         int32
-	StackTraceDepth uint16
-}
-
-// subtypes in heap dump
-
-type HeapDumpSubTag byte
-
-const (
-	RootUnknownTag        HeapDumpSubTag = 0xFF
-	RootJNIGlobalTag      HeapDumpSubTag = 0x01
-	RootJNILocalTag       HeapDumpSubTag = 0x02
-	RootJavaFrameTag      HeapDumpSubTag = 0x03
-	RootNativeStackTag    HeapDumpSubTag = 0x04
-	RootStickyClassTag    HeapDumpSubTag = 0x05
-	RootThreadBlockTag    HeapDumpSubTag = 0x06
-	RootMonitorUsedTag    HeapDumpSubTag = 0x07
-	RootThreadObjectTag   HeapDumpSubTag = 0x08
-	ClassDumpTag          HeapDumpSubTag = 0x20
-	InstanceDumpTag       HeapDumpSubTag = 0x21
-	ObjectArrayDumpTag    HeapDumpSubTag = 0x22
-	PrimitiveArrayDumpTag HeapDumpSubTag = 0x23
-)
-
-func (hdst HeapDumpSubTag) String() string {
-	switch hdst {
-	case RootUnknownTag:
-		return "RootUnknown"
-	case RootJNIGlobalTag:
-		return "RootJNIGlobal"
-	case RootJNILocalTag:
-		return "RootJNILocal"
-	case RootJavaFrameTag:
-		return "RootJavaFrame"
-	case RootNativeStackTag:
-		return "RootNativeStack"
-	case RootStickyClassTag:
-		return "RootStickyClass"
-	case RootThreadBlockTag:
-		return "RootThreadBlock"
-	case RootMonitorUsedTag:
-		return "RootMonitorUsed"
-	case RootThreadObjectTag:
-		return "RootThreadObject"
-	case ClassDumpTag:
-		return "ClassDump"
-	case InstanceDumpTag:
-		return "InstanceDump"
-	case ObjectArrayDumpTag:
-		return "ObjectArrayDump"
-	case PrimitiveArrayDumpTag:
-		return "PrimitiveArrayDump"
-	}
-	return "Unknown"
-}
-
-// 0xFF
-type RootUnknown struct {
-	ObjectId ID
-}
-
-// 0x01
-type RootJNIGlobal struct {
-	ObjectId ID
-	JNIRef   ID
-}
-
-// 0x02
-type RootJNILocal struct {
-	ObjectId           ID
-	ThreadSerialNumber int32
-	FrameNumber        int32 // -1 for empty
-}
-
-// 0x03
-type RootJavaFrame struct {
-	ObjectId           ID
-	ThreadSerialNumber int32
-	FrameNumber        int32 // -1 for empty
-}
-
-// 0x04
-type RootNativeStack struct {
-	ObjectId           ID
-	ThreadSerialNumber int32
-}
-
-// 0x05
-type RootStickyClass struct {
-	ObjectId ID
-}
-
-// 0x06
-type RootThreadBlock struct {
-	ObjectId           ID
-	ThreadSerialNumber int32
-}
-
-// 0x07
-type RootMonitorUsed struct {
-	ObjectId ID
-}
-
-// 0x08
-type RootThreadObject struct {
-	ObjectId               ID
-	ThreadSerialNumber     int32
-	StackTraceSerialNumber int32
-}
-
-// 0x20
-type ClassDump struct {
-	ClassObjectId            ID
-	StackTraceSerialNumber   int32
-	SuperClassObjectId       ID
-	ClassLoaderObjectId      ID
-	SignersObjectId          ID
-	ProtectionDomainObjectId ID
-	reserved_1               ID
-	reserved_2               ID
-	InstanceSize             int32 //in bytes
-	ConstantPoolSize         uint16
-	ConstantPool             []ConstantPoolRecord
-	NumberOfStaticFields     uint16
-	StaticFields             []StaticFieldRecord
-	NumberOfInstanceFields   uint16
-	InstanceFields           []InstanceFieldRecord
-}
-
-type ConstantPoolRecord struct {
-	ConstantPoolIndex uint16
-	Type              BasicType
-	Value             []byte //size depends on the type
-}
-
-type StaticFieldRecord struct {
-	StaticFieldNameStringId ID
-	Type                    BasicType
-	Value                   []byte //size depends on the type
-}
-
-type InstanceFieldRecord struct {
-	FieldNameStringId ID
-	Type              BasicType
-}
-
-// 0x21
-type InstanceDump struct {
-	ObjectId               ID
-	StackTraceSerialNumber int32
-	ClassObjectId          ID
-	NumberOfBytes          int32
-	InstanceFieldValues    []byte
-}
-
-// 0x22
-type ObjectArrayDump struct {
-	ArrayObjectId          ID
-	StackTraceSerialNumber int32
-	NumberOfElements       int32
-	ArrayClassObjectId     ID
-	Elements               []ID
-}
-
-// 0x23
-type PrimitiveArrayDump struct {
-	ArrayObjectId          ID
-	StackTraceSerialNumber int32
-	NumberOfElements       int32
-	ElementType            BasicType
-	Elements               []byte
-}
-
-func readID(reader *bytes.Reader) ID {
+func readID(reader io.Reader) ID {
 	var id ID
 	binary.Read(reader, binary.BigEndian, &id)
 	return id
 }
 
-func readInt64(reader *bytes.Reader) uint64 {
-	var i uint64
+func readInt64(reader io.Reader) int64 {
+	var i int64
 	binary.Read(reader, binary.BigEndian, &i)
 	return i
 }
 
-func readInt32(reader *bytes.Reader) int32 {
+func readInt32(reader io.Reader) int32 {
 	var i int32
 	binary.Read(reader, binary.BigEndian, &i)
 	return i
 }
 
-func readUint16(reader *bytes.Reader) uint16 {
+func readUint16(reader io.Reader) uint16 {
 	var i uint16
 	binary.Read(reader, binary.BigEndian, &i)
 	return i
 }
 
-func readBasicType(reader *bytes.Reader) BasicType {
+func readBasicType(reader io.Reader) BasicType {
 	var bt BasicType
 	binary.Read(reader, binary.BigEndian, &bt)
 	return bt
 }
 
-func readArray(reader *bytes.Reader, size int32) []byte {
+func readArray(reader io.Reader, size int32) []byte {
+	if size < 0 {
+		fmt.Printf("Error: negative array size %d\n", size)
+		return nil
+	}
+	if size == 0 {
+		return []byte{}
+	}
 	data := make([]byte, size)
-	reader.Read(data)
+	io.ReadFull(reader, data)
 	return data
 }
 
@@ -458,102 +105,142 @@ func readRecord(file *os.File) (HprofRecord, error) {
 		return record, err
 	}
 
-	// Read the data based on the length
-	record.Data = make([]byte, record.Length)
-	if _, err := file.Read(record.Data); err != nil {
-		fmt.Errorf("Error reading data: %v\n", err)
-		return record, err
-	}
+	// Get reader for the data
+	record.DataReader = io.LimitReader(file, int64(record.Length))
 
 	return record, nil
 }
 
-func readLoadClass(data []byte) interface{} {
-	return LoadClass{
-		ClassSerialNumber:      int32(binary.BigEndian.Uint32(data[:4])),
-		ClassObjectId:          ID(binary.BigEndian.Uint64(data[4:12])),
-		StackTraceSerialNumber: int32(binary.BigEndian.Uint32(data[12:16])),
-		ClassNameStringId:      ID(binary.BigEndian.Uint64(data[16:24])),
+// Readers
+
+func readStringInUTF8(reader io.Reader, length int32) {
+	StringInUTF8 := StringInUTF8{
+		StringID: readID(reader),
+	}
+
+	// The length includes the StringID (8 bytes), so subtract that
+	dataLength := length - 8
+	if dataLength < 0 {
+		fmt.Printf("Error: invalid string data length %d\n", dataLength)
+		return
+	}
+
+	StringInUTF8.Bytes = readArray(reader, dataLength)
+
+	if err := SaveStringInUTF8(&StringInUTF8); err != nil {
+		fmt.Printf("Error saving StringInUTF8 to database: %v\n", err)
 	}
 }
 
-func readUnloadClass(data []byte) interface{} {
-	return UnloadClass{
-		ClassSerialNumber: int32(binary.BigEndian.Uint32(data[:4])),
+func readLoadClass(reader io.Reader) {
+	loadClass := LoadClass{
+		ClassSerialNumber:      readInt32(reader),
+		ClassObjectID:          readID(reader),
+		StackTraceSerialNumber: readInt32(reader),
+		ClassNameStringID:      readID(reader),
+	}
+
+	if err := SaveLoadClass(&loadClass); err != nil {
+		fmt.Printf("Error saving LoadClass to database: %v\n", err)
 	}
 }
 
-func readStringInUTF8(data []byte) interface{} {
-	return StringInUTF8{
-		StringId: ID(binary.BigEndian.Uint64(data[:8])),
-		Bytes:    append([]byte(nil), data[8:]...),
+func readUnloadClass(reader io.Reader) {
+	unloadClass := UnloadClass{
+		ClassSerialNumber: readInt32(reader),
+	}
+
+	if err := SaveUnloadClass(&unloadClass); err != nil {
+		fmt.Errorf("Error saving UnloadClass to database: %v\n", err)
 	}
 }
 
-func readStackFrame(data []byte) interface{} {
-	return StackFrame{
-		FrameId:                 ID(binary.BigEndian.Uint64(data[:8])),
-		MethodId:                ID(binary.BigEndian.Uint64(data[8:16])),
-		MethodSignatureStringId: ID(binary.BigEndian.Uint64(data[16:24])),
-		SourceFileNameStringId:  ID(binary.BigEndian.Uint64(data[24:32])),
-		ClassSerialNumber:       int32(binary.BigEndian.Uint32(data[32:36])),
-		flag:                    int32(binary.BigEndian.Uint32(data[36:40])),
+func readStackFrame(reader io.Reader) {
+	stackFrame := StackFrame{
+		ID:                      readID(reader),
+		MethodNameStringID:      readID(reader),
+		MethodSignatureStringID: readID(reader),
+		SourceFileNameStringID:  readID(reader),
+		ClassSerialNumber:       readInt32(reader),
+		Flag:                    readInt32(reader),
+	}
+
+	if err := SaveStackFrame(&stackFrame); err != nil {
+		fmt.Errorf("Error saving StackFrame to database: %v\n", err)
 	}
 }
 
-func readStackTrace(data []byte) interface{} {
+func readStackTrace(reader io.Reader) {
 	stackTrace := StackTrace{
-		StackTraceSerialNumber: int32(binary.BigEndian.Uint32(data[:4])),
-		ThreadSerialNumber:     int32(binary.BigEndian.Uint32(data[4:8])),
-		NumberOfFrames:         int32(binary.BigEndian.Uint32(data[8:12])),
+		StackTraceSerialNumber: readInt32(reader),
+		ThreadSerialNumber:     readInt32(reader),
+	}
+
+	framesCount := readInt32(reader)
+
+	if err := SaveStackTrace(&stackTrace); err != nil {
+		fmt.Errorf("Error saving StackTrace to database: %v\n", err)
+		return
 	}
 
 	// Read the frames ID
-	stackTrace.FramesID = make([]ID, stackTrace.NumberOfFrames)
-	for i := 0; i < int(stackTrace.NumberOfFrames); i++ {
-		stackTrace.FramesID[i] = ID(binary.BigEndian.Uint64(data[12+i*8 : 12+(i+1)*8]))
-	}
+	for i := int32(0); i < framesCount; i++ {
+		frameId := readID(reader)
 
-	return stackTrace
+		if err := GetDB().
+			Model(&StackFrame{}).
+			Where("\"ID\" = ?", frameId).
+			UpdateColumn("\"StackTraceSerialNumber\"", stackTrace.StackTraceSerialNumber).Error; err != nil {
+			fmt.Errorf("Error updating StackFrame with frame ID %d: %v\n", frameId, err)
+		}
+	}
 }
 
-func readAllocSites(data []byte) interface{} {
+func readAllocSites(reader io.Reader) {
 	allocSites := AllocSites{
-		BitMaskSize:            uint16(binary.BigEndian.Uint16(data[:2])),
-		CutoffRatio:            int32(binary.BigEndian.Uint32(data[2:6])),
-		TotalLiveBytes:         int32(binary.BigEndian.Uint32(data[6:10])),
-		TotalLiveInstances:     int32(binary.BigEndian.Uint32(data[10:14])),
-		TotalBytesAllocated:    int64(binary.BigEndian.Uint64(data[14:22])),
-		TotalInstanceAllocated: int64(binary.BigEndian.Uint64(data[22:30])),
-		NumberOfSites:          int32(binary.BigEndian.Uint32(data[30:34])),
+		BitMaskSize:            readUint16(reader),
+		CutoffRatio:            readInt32(reader),
+		TotalLiveBytes:         readInt32(reader),
+		TotalLiveInstances:     readInt32(reader),
+		TotalBytesAllocated:    readInt64(reader),
+		TotalInstanceAllocated: readInt64(reader),
+	}
+
+	numberOfSites := readInt32(reader)
+
+	if err := SaveAllocSites(&allocSites); err != nil {
+		fmt.Errorf("Error saving AllocSites to database: %v\n", err)
+		return
 	}
 
 	// Read the sites
-	allocSites.Sites = make([]Site, allocSites.NumberOfSites)
-	for i := 0; i < int(allocSites.NumberOfSites); i++ {
+	for i := int32(0); i < numberOfSites; i++ {
 		site := Site{
-			ArrayIndicator:             BasicType(data[34+i*25]),
-			ClassSerialNumber:          int32(binary.BigEndian.Uint32(data[35+i*25 : 39+i*25])),
-			StackTraceSerialNumber:     int32(binary.BigEndian.Uint32(data[39+i*25 : 43+i*25])),
-			NumberOfLiveBytes:          int32(binary.BigEndian.Uint32(data[43+i*25 : 47+i*25])),
-			NumberOfLiveInstances:      int32(binary.BigEndian.Uint32(data[47+i*25 : 51+i*25])),
-			NumberOfBytesAllocated:     int32(binary.BigEndian.Uint32(data[51+i*25 : 55+i*25])),
-			NumberOfInstancesAllocated: int32(binary.BigEndian.Uint32(data[55+i*25 : 59+i*25])),
+			AllocSitesID:               allocSites.ID,
+			ArrayIndicator:             readBasicType(reader),
+			ClassSerialNumber:          readInt32(reader),
+			StackTraceSerialNumber:     readInt32(reader),
+			NumberOfLiveBytes:          readInt32(reader),
+			NumberOfLiveInstances:      readInt32(reader),
+			NumberOfBytesAllocated:     readInt32(reader),
+			NumberOfInstancesAllocated: readInt32(reader),
 		}
-		allocSites.Sites[i] = site
+
+		if err := SaveSite(&site); err != nil {
+			fmt.Errorf("Error saving Site to database: %v\n", err)
+			return
+		}
 	}
-
-	return allocSites
 }
 
-func readHeapDump(data []byte) HeapDump {
-	heapDump := HeapDump{}
+// func readHeapDump(data []byte) HeapDump {
+// 	heapDump := HeapDump{}
 
-	heapDump.data = make([]byte, len(data))
-	copy(heapDump.data, data)
+// 	heapDump.data = make([]byte, len(data))
+// 	copy(heapDump.data, data)
 
-	return heapDump
-}
+// 	return heapDump
+// }
 
 func readCPUSamples(data []byte) interface{} {
 	cpuSamples := CPUSamples{
@@ -581,188 +268,374 @@ func readControlSettings(data []byte) interface{} {
 	}
 }
 
-func readRootUnknown(reader *bytes.Reader) interface{} {
-	return RootUnknown{
-		ObjectId: readID(reader),
+func readRootUnknown(reader io.Reader) {
+	rootUnknown := RootUnknown{
+		ID: readID(reader),
+	}
+
+	if err := SaveRootUnknown(&rootUnknown); err != nil {
+		fmt.Errorf("Error saving RootUnknown to database: %v\n", err)
 	}
 }
 
-func readRootJNIGlobal(reader *bytes.Reader) interface{} {
-	return RootJNIGlobal{
-		ObjectId: readID(reader),
-		JNIRef:   readID(reader),
+func readRootJNIGlobal(reader io.Reader) {
+	rootJNIGlobal := RootJNIGlobal{
+		ID:           readID(reader),
+		JNIGlobalRef: readID(reader),
+	}
+
+	if err := SaveRootJNIGlobal(&rootJNIGlobal); err != nil {
+		fmt.Errorf("Error saving RootJNIGlobal to database: %v\n", err)
 	}
 }
 
-func readRootJNILocal(reader *bytes.Reader) interface{} {
-	return RootJNILocal{
-		ObjectId:           readID(reader),
+func readRootJNILocal(reader io.Reader) {
+	rootJNILocal := RootJNILocal{
+		ID:                      readID(reader),
+		ThreadSerialNumber:      readInt32(reader),
+		FrameNumberInStackTrace: readInt32(reader),
+	}
+
+	if err := SaveRootJNILocal(&rootJNILocal); err != nil {
+		fmt.Errorf("Error saving RootJNILocal to database: %v\n", err)
+	}
+}
+
+func readRootJavaFrame(reader io.Reader) {
+	rootJavaFrame := RootJavaFrame{
+		ObjectID:                readID(reader),
+		ThreadSerialNumber:      readInt32(reader),
+		FrameNumberInStackTrace: readInt32(reader),
+	}
+
+	if err := SaveRootJavaFrame(&rootJavaFrame); err != nil {
+		fmt.Errorf("Error saving RootJavaFrame to database: %v\n", err)
+	}
+}
+
+func readRootNativeStack(reader io.Reader) {
+	rootNativeStack := RootNativeStack{
+		ID:                 readID(reader),
 		ThreadSerialNumber: readInt32(reader),
-		FrameNumber:        readInt32(reader),
+	}
+
+	if err := SaveRootNativeStack(&rootNativeStack); err != nil {
+		fmt.Errorf("Error saving RootNativeStack to database: %v\n", err)
 	}
 }
 
-func readRootJavaFrame(reader *bytes.Reader) interface{} {
-	return RootJavaFrame{
-		ObjectId:           readID(reader),
-		ThreadSerialNumber: readInt32(reader),
-		FrameNumber:        readInt32(reader),
+func readRootStickyClass(reader io.Reader) {
+	rootStickyClass := RootStickyClass{
+		ID: readID(reader),
+	}
+
+	if err := SaveRootStickyClass(&rootStickyClass); err != nil {
+		fmt.Errorf("Error saving RootStickyClass to database: %v\n", err)
 	}
 }
 
-func readRootNativeStack(reader *bytes.Reader) interface{} {
-	return RootNativeStack{
-		ObjectId:           readID(reader),
-		ThreadSerialNumber: readInt32(reader),
-	}
-}
-
-func readRootStickyClass(reader *bytes.Reader) interface{} {
-	return RootStickyClass{
-		ObjectId: readID(reader),
-	}
-}
-
-func readRootThreadBlock(reader *bytes.Reader) interface{} {
-	return RootThreadBlock{
-		ObjectId:           readID(reader),
+func readRootThreadBlock(reader io.Reader) {
+	rootThreadBlock := RootThreadBlock{
+		ID:                 readID(reader),
 		ThreadSerialNumber: readInt32(reader),
 	}
-}
 
-func readRootMonitorUsed(reader *bytes.Reader) interface{} {
-	return RootMonitorUsed{
-		ObjectId: readID(reader),
+	if err := SaveRootThreadBlock(&rootThreadBlock); err != nil {
+		fmt.Errorf("Error saving RootThreadBlock to database: %v\n", err)
 	}
 }
 
-func readRootThreadObject(reader *bytes.Reader) interface{} {
-	return RootThreadObject{
-		ObjectId:               readID(reader),
+func readRootMonitorUsed(reader io.Reader) {
+	rootMonitorUsed := RootMonitorUsed{
+		ID: readID(reader),
+	}
+
+	if err := SaveRootMonitorUsed(&rootMonitorUsed); err != nil {
+		fmt.Errorf("Error saving RootMonitorUsed to database: %v\n", err)
+	}
+}
+
+func readRootThreadObject(reader io.Reader) {
+	rootThreadObject := RootThreadObject{
+		ID:                     readID(reader),
 		ThreadSerialNumber:     readInt32(reader),
 		StackTraceSerialNumber: readInt32(reader),
 	}
+
+	if err := SaveRootThreadObject(&rootThreadObject); err != nil {
+		fmt.Errorf("Error saving RootThreadObject to database: %v\n", err)
+	}
 }
 
-func readClassDump(reader *bytes.Reader) interface{} {
+func readClassDump(reader io.Reader) {
 	classDump := ClassDump{
-		ClassObjectId:            readID(reader),
+		ID:                       readID(reader),
 		StackTraceSerialNumber:   readInt32(reader),
-		SuperClassObjectId:       readID(reader),
-		ClassLoaderObjectId:      readID(reader),
-		SignersObjectId:          readID(reader),
-		ProtectionDomainObjectId: readID(reader),
-		reserved_1:               readID(reader),
-		reserved_2:               readID(reader),
+		SuperClassObjectID:       readID(reader),
+		ClassLoaderObjectID:      readID(reader),
+		SignersObjectID:          readID(reader),
+		ProtectionDomainObjectID: readID(reader),
+		Reserved1:                readID(reader),
+		Reserved2:                readID(reader),
 		InstanceSize:             readInt32(reader),
 	}
 
+	if err := SaveClassDump(&classDump); err != nil {
+		fmt.Errorf("Error saving ClassDump to database: %v\n", err)
+		return
+	}
+
 	// Read the constant pool
-	classDump.ConstantPoolSize = readUint16(reader)
-	classDump.ConstantPool = make([]ConstantPoolRecord, classDump.ConstantPoolSize)
-	for i := 0; i < int(classDump.ConstantPoolSize); i++ {
+	constantPoolSize := readUint16(reader)
+	for i := 0; i < int(constantPoolSize); i++ {
 		constantPoolRecord := ConstantPoolRecord{
+			ClassDumpID:       classDump.ID,
 			ConstantPoolIndex: readUint16(reader),
 			Type:              readBasicType(reader),
 		}
+
 		constantPoolRecord.Value = readArray(reader, constantPoolRecord.Type.GetSize())
-		classDump.ConstantPool[i] = constantPoolRecord
+
+		if err := SaveConstantPoolRecord(&constantPoolRecord); err != nil {
+			fmt.Errorf("Error saving ConstantPoolRecord to database: %v\n", err)
+			return
+		}
 	}
 
 	// Read the static fields
-	classDump.NumberOfStaticFields = readUint16(reader)
-	classDump.StaticFields = make([]StaticFieldRecord, classDump.NumberOfStaticFields)
-	for i := 0; i < int(classDump.NumberOfStaticFields); i++ {
+	numberOfStaticFields := readUint16(reader)
+	for i := 0; i < int(numberOfStaticFields); i++ {
 		staticFieldRecord := StaticFieldRecord{
-			StaticFieldNameStringId: readID(reader),
+			ClassDumpID:             classDump.ID,
+			StaticFieldNameStringID: readID(reader),
 			Type:                    readBasicType(reader),
 		}
 
 		staticFieldRecord.Value = readArray(reader, staticFieldRecord.Type.GetSize())
-		classDump.StaticFields[i] = staticFieldRecord
+
+		if err := SaveStaticFieldRecord(&staticFieldRecord); err != nil {
+			fmt.Errorf("Error saving StaticFieldRecord to database: %v\n", err)
+			return
+		}
 	}
 
 	// Read the instance fields
-	classDump.NumberOfInstanceFields = readUint16(reader)
-	classDump.InstanceFields = make([]InstanceFieldRecord, classDump.NumberOfInstanceFields)
-	for i := 0; i < int(classDump.NumberOfInstanceFields); i++ {
+	numberOfInstanceFields := readUint16(reader)
+	for i := 0; i < int(numberOfInstanceFields); i++ {
 		instanceFieldRecord := InstanceFieldRecord{
-			FieldNameStringId: readID(reader),
+			ClassDumpID:       classDump.ID,
+			FieldNameStringID: readID(reader),
 			Type:              readBasicType(reader),
 		}
-		classDump.InstanceFields[i] = instanceFieldRecord
-	}
 
-	return classDump
+		if err := SaveInstanceFieldRecord(&instanceFieldRecord); err != nil {
+			fmt.Errorf("Error saving InstanceFieldRecord to database: %v\n", err)
+			return
+		}
+	}
 }
 
-func readInstanceDump(reader *bytes.Reader) interface{} {
+// After all we need to parse Data from InstanceDump, because we dont know the type of each value in Data.
+// ClassDump.InstanceFileds will help us to understand the type of each value in Data.
+func readInstanceDump(reader io.Reader) {
 	instanceDump := InstanceDump{
-		ObjectId:               readID(reader),
+		ID:                     readID(reader),
 		StackTraceSerialNumber: readInt32(reader),
-		ClassObjectId:          readID(reader),
+		ClassObjectID:          readID(reader),
 		NumberOfBytes:          readInt32(reader),
 	}
 
-	instanceDump.InstanceFieldValues = readArray(reader, instanceDump.NumberOfBytes)
+	instanceDump.Data = readArray(reader, instanceDump.NumberOfBytes)
 
-	return instanceDump
+	if err := SaveInstanceDump(&instanceDump); err != nil {
+		fmt.Errorf("Error saving InstanceDump to database: %v\n", err)
+		return
+	}
 }
 
-func readObjectArrayDump(reader *bytes.Reader) interface{} {
+func readObjectArrayDump(reader io.Reader) {
 	objectArrayDump := ObjectArrayDump{
-		ArrayObjectId:          readID(reader),
+		ID:                     readID(reader),
 		StackTraceSerialNumber: readInt32(reader),
 		NumberOfElements:       readInt32(reader),
-		ArrayClassObjectId:     readID(reader),
+		ArrayClassObjectID:     readID(reader),
 	}
 
-	objectArrayDump.Elements = make([]ID, objectArrayDump.NumberOfElements)
-	for i := 0; i < int(objectArrayDump.NumberOfElements); i++ {
-		objectArrayDump.Elements[i] = readID(reader)
+	// Add validation for reasonable array size
+	if objectArrayDump.NumberOfElements < 0 {
+		fmt.Printf("Error: negative array elements count %d\n", objectArrayDump.NumberOfElements)
+		return
 	}
 
-	return objectArrayDump
+	if objectArrayDump.NumberOfElements > 10000 {
+		fmt.Printf("Processing ObjectArrayDump with %d elements\n", objectArrayDump.NumberOfElements)
+	}
+
+	// Limit processing of extremely large arrays
+	const maxElementsToProcess = 10000000 // 10 million elements max
+	if objectArrayDump.NumberOfElements > maxElementsToProcess {
+		fmt.Printf("Warning: Object array too large (%d elements), skipping element processing\n", objectArrayDump.NumberOfElements)
+
+		// Save the array metadata
+		if err := SaveObjectArrayDump(&objectArrayDump); err != nil {
+			fmt.Printf("Error saving ObjectArrayDump to database: %v\n", err)
+			return
+		}
+
+		// Skip the data without processing individual elements
+		for i := int32(0); i < objectArrayDump.NumberOfElements; i++ {
+			readID(reader) // Skip each ID
+		}
+		return
+	}
+
+	if err := SaveObjectArrayDump(&objectArrayDump); err != nil {
+		fmt.Printf("Error saving ObjectArrayDump to database: %v\n", err)
+		return
+	}
+
+	// Process elements in batches for better performance
+	const batchSize = 10000
+	elements := make([]ObjectArrayElement, 0, batchSize)
+
+	for i := int32(0); i < objectArrayDump.NumberOfElements; i++ {
+		arrayElement := ObjectArrayElement{
+			ObjectArrayDumpID: objectArrayDump.ID,
+			Index:             i,
+			InstanceDumpID:    readID(reader),
+		}
+
+		elements = append(elements, arrayElement)
+
+		// Save in batches
+		if len(elements) >= batchSize || i == objectArrayDump.NumberOfElements-1 {
+			if err := GetDB().CreateInBatches(elements, batchSize).Error; err != nil {
+				fmt.Printf("Error saving ObjectArrayElement batch to database: %v\n", err)
+				return
+			}
+
+			// Show progress for large arrays
+			if objectArrayDump.NumberOfElements > 100000 {
+				progress := float64(i+1) / float64(objectArrayDump.NumberOfElements) * 100
+				fmt.Printf("ObjectArray Progress: %.1f%% (%d/%d elements)\n", progress, i+1, objectArrayDump.NumberOfElements)
+			}
+
+			elements = elements[:0] // Reset slice
+		}
+	}
 }
 
-func readPrimitiveArrayDump(reader *bytes.Reader) interface{} {
+func readPrimitiveArrayDump(reader io.Reader) {
 	primitiveArrayDump := PrimitiveArrayDump{
-		ArrayObjectId:          readID(reader),
+		ID:                     readID(reader),
 		StackTraceSerialNumber: readInt32(reader),
 		NumberOfElements:       readInt32(reader),
-		ElementType:            readBasicType(reader),
+		Type:                   readBasicType(reader),
 	}
 
-	primitiveArrayDump.Elements = readArray(
-		reader,
-		primitiveArrayDump.NumberOfElements*primitiveArrayDump.ElementType.GetSize(),
-	)
+	// Add validation for reasonable array size
+	if primitiveArrayDump.NumberOfElements < 0 {
+		fmt.Printf("Error: negative array elements count %d\n", primitiveArrayDump.NumberOfElements)
+		return
+	}
 
-	return primitiveArrayDump
+	if primitiveArrayDump.NumberOfElements > 10000 {
+		fmt.Printf("Processing PrimitiveArrayDump with %d elements (type: %s)\n",
+			primitiveArrayDump.NumberOfElements, primitiveArrayDump.Type.GetName())
+	}
+
+	// Limit processing of extremely large arrays
+	const maxElementsToProcess = 1000000 // 1 million elements max
+	if primitiveArrayDump.NumberOfElements > maxElementsToProcess {
+		fmt.Printf("Warning: Array too large (%d elements), skipping element processing\n", primitiveArrayDump.NumberOfElements)
+
+		// Save the array metadata
+		if err := SavePrimitiveArrayDump(&primitiveArrayDump); err != nil {
+			fmt.Printf("Error saving PrimitiveArrayDump to database: %v\n", err)
+			return
+		}
+
+		// Skip the data without processing individual elements
+		totalDataSize := primitiveArrayDump.NumberOfElements * primitiveArrayDump.Type.GetSize()
+		readArray(reader, totalDataSize)
+		return
+	}
+
+	if err := SavePrimitiveArrayDump(&primitiveArrayDump); err != nil {
+		fmt.Printf("Error saving PrimitiveArrayDump to database: %v\n", err)
+		return
+	}
+
+	// Read all array data at once instead of element by element
+	elementSize := primitiveArrayDump.Type.GetSize()
+	totalDataSize := primitiveArrayDump.NumberOfElements * elementSize
+	allData := readArray(reader, totalDataSize)
+
+	if allData == nil {
+		fmt.Printf("Error reading array data\n")
+		return
+	}
+
+	// Process elements in batches for better performance
+	const batchSize = 10000
+	elements := make([]PrimitiveArrayElement, 0, batchSize)
+
+	for i := int32(0); i < primitiveArrayDump.NumberOfElements; i++ {
+		start := i * elementSize
+		end := start + elementSize
+
+		if int(end) > len(allData) {
+			fmt.Printf("Error: array data truncated at element %d\n", i)
+			break
+		}
+
+		element := PrimitiveArrayElement{
+			PrimitiveArrayDumpID: primitiveArrayDump.ID,
+			Index:                i,
+			Value:                allData[start:end],
+		}
+
+		elements = append(elements, element)
+
+		// Save in batches and show progress
+		if len(elements) >= batchSize || i == primitiveArrayDump.NumberOfElements-1 {
+			if err := GetDB().CreateInBatches(elements, batchSize).Error; err != nil {
+				fmt.Printf("Error saving PrimitiveArrayElement batch to database: %v\n", err)
+				return
+			}
+
+			// Show progress for large arrays
+			if primitiveArrayDump.NumberOfElements > 100000 {
+				progress := float64(i+1) / float64(primitiveArrayDump.NumberOfElements) * 100
+				fmt.Printf("PrimitiveArray Progress: %.1f%% (%d/%d elements)\n", progress, i+1, primitiveArrayDump.NumberOfElements)
+			}
+
+			elements = elements[:0] // Reset slice
+		}
+	}
 }
 
-var (
-	IDtoStringInUTF8                = make(map[ID]string)
-	IDtoSizeClassDump               = make(map[ID]int64)
-	ClassObjectIdToClassNameID      = make(map[ID]ID)
-	IDtoStackFrame                  = make(map[ID]StackFrame)
-	StackTraceIdToStackFrameIds     = make(map[int32][]ID)
-	ClassObjectIdToCountInstances   = make(map[ID]int32)
-	IDtoClassLoaderID               = make(map[ID]ID)
-	ObjectIdToInstanceDump          = make(map[ID]InstanceDump)
-	ObjectIdToInstanceDumpMap       = make(map[ID]InstanceDump)
-	ClassObjectIdToClassDumpMap     = make(map[ID]ClassDump)
-	ObjectIdToObjectArrayDumpMap    = make(map[ID]ObjectArrayDump)
-	ObjectIdToPrimitiveArrayDumpMap = make(map[ID]PrimitiveArrayDump)
-	StringUtf8Map                   = make(map[ID]StringInUTF8)
-	ClassObjectIdToLoadClassMap     = make(map[ID]LoadClass)
-)
+// var (
+// 	IDtoStringInUTF8                = make(map[ID]string)
+// 	IDtoSizeClassDump               = make(map[ID]int64)
+// 	ClassObjectIdToClassNameID      = make(map[ID]ID)
+// 	IDtoStackFrame                  = make(map[ID]StackFrame)
+// 	StackTraceIdToStackFrameIds     = make(map[int32][]ID)
+// 	ClassObjectIdToCountInstances   = make(map[ID]int32)
+// 	IDtoClassLoaderID               = make(map[ID]ID)
+// 	ObjectIdToInstanceDump          = make(map[ID]InstanceDump)
+// 	ObjectIdToInstanceDumpMap       = make(map[ID]InstanceDump)
+// 	ClassObjectIdToClassDumpMap     = make(map[ID]ClassDump)
+// 	ObjectIdToObjectArrayDumpMap    = make(map[ID]ObjectArrayDump)
+// 	ObjectIdToPrimitiveArrayDumpMap = make(map[ID]PrimitiveArrayDump)
+// 	StringUtf8Map                   = make(map[ID]StringInUTF8)
+// 	ClassObjectIdToLoadClassMap     = make(map[ID]LoadClass)
+// )
 
 const ArrayHeaderSize = int32(16)
 
 func ParseHeapDump(heapDumpFile *os.File) {
-
-	type readerFunction func(*bytes.Reader) interface{}
+	type readerFunction func(io.Reader)
 
 	subTagFuncMap := map[HeapDumpSubTag]readerFunction{
 		RootUnknownTag:        readRootUnknown,
@@ -785,6 +658,9 @@ func ParseHeapDump(heapDumpFile *os.File) {
 	fmt.Printf("Header: %+v\n", header)
 
 	// Read records
+	t := 0
+	i := 0
+	fmt.Printf("Reading records...\n")
 	for {
 		record, err := readRecord(heapDumpFile)
 		if err == io.EOF {
@@ -797,28 +673,19 @@ func ParseHeapDump(heapDumpFile *os.File) {
 
 		switch record.Tag {
 		case StringUtf8Tag:
-			stringInUTF8 := readStringInUTF8(record.Data).(StringInUTF8)
-			IDtoStringInUTF8[stringInUTF8.StringId] = string(stringInUTF8.Bytes)
-			StringUtf8Map[stringInUTF8.StringId] = stringInUTF8
+			readStringInUTF8(record.DataReader, record.Length)
 		case LoadClassTag:
-			loadClass := readLoadClass(record.Data).(LoadClass)
-			ClassObjectIdToClassNameID[loadClass.ClassObjectId] = loadClass.ClassNameStringId
-			ClassObjectIdToLoadClassMap[loadClass.ClassObjectId] = loadClass
+			readLoadClass(record.DataReader)
 		case UnloadClassTag:
-			unloadClass := readUnloadClass(record.Data).(UnloadClass)
-			_ = unloadClass
+			readUnloadClass(record.DataReader)
 		case StackFrameTag:
-			stackFrame := readStackFrame(record.Data).(StackFrame)
-			IDtoStackFrame[stackFrame.FrameId] = stackFrame
+			readStackFrame(record.DataReader)
 		case StackTraceTag:
-			stackTrace := readStackTrace(record.Data).(StackTrace)
-			StackTraceIdToStackFrameIds[stackTrace.StackTraceSerialNumber] = stackTrace.FramesID
+			readStackTrace(record.DataReader)
 		case AllocSitesTag:
-			allocSites := readAllocSites(record.Data).(AllocSites)
-			_ = allocSites
+			readAllocSites(record.DataReader)
 		case HeapDumpTag, HeapDumpSegmentTag:
-			heapDump := readHeapDump(record.Data)
-			reader := bytes.NewReader(heapDump.data)
+			reader := record.DataReader
 			for {
 				var subTag HeapDumpSubTag
 				err := binary.Read(reader, binary.BigEndian, &subTag)
@@ -831,75 +698,130 @@ func ParseHeapDump(heapDumpFile *os.File) {
 				}
 
 				if readerFunction, ok := subTagFuncMap[subTag]; ok {
-					switch subTag {
-					case InstanceDumpTag:
-						instanceDump := readerFunction(reader).(InstanceDump)
-						IDtoSizeClassDump[instanceDump.ClassObjectId] += int64(instanceDump.NumberOfBytes)
-						ClassObjectIdToCountInstances[instanceDump.ClassObjectId]++
-						ObjectIdToInstanceDumpMap[instanceDump.ObjectId] = instanceDump
-					case ClassDumpTag:
-						classDump := readerFunction(reader).(ClassDump)
-						IDtoSizeClassDump[classDump.ClassObjectId] += int64(classDump.InstanceSize)
-						IDtoClassLoaderID[classDump.ClassObjectId] = classDump.ClassLoaderObjectId
-						ClassObjectIdToClassDumpMap[classDump.ClassObjectId] = classDump
-					case ObjectArrayDumpTag:
-						objectArrayDump := readerFunction(reader).(ObjectArrayDump)
-						ObjectIdToObjectArrayDumpMap[objectArrayDump.ArrayObjectId] = objectArrayDump
-					case PrimitiveArrayDumpTag:
-						primitiveArrayDump := readerFunction(reader).(PrimitiveArrayDump)
-						ObjectIdToPrimitiveArrayDumpMap[primitiveArrayDump.ArrayObjectId] = primitiveArrayDump
-					default:
-						_ = readerFunction(reader)
-					}
+					readerFunction(reader)
 				} else {
 					fmt.Errorf("Unknown sub tag: %d\n", subTag)
 					break
 				}
+
+				i++
+				if i%500 == 0 {
+					fmt.Printf("\tProcessed %d sub tags\n", i)
+				}
 			}
 		}
-	}
+		t++
 
-	printSizeClasses(15)
-	printCountInstances(15)
-	printObjectLoadersInfo(15)
-	printFullClassSize(15)
-	printArrayInfo(15)
+		if t%1000 == 0 {
+			fmt.Printf("Processed %d records\n", t)
+		}
+	}
 }
 
-func printSizeClasses(max int) {
-	fmt.Printf("\n\nTop %d classes by instance size\n", max)
-	type IdSize struct {
-		id   ID
-		size int64
+type AnalyzeResult struct {
+	Header string
+	Body   []string
+}
+
+func (result AnalyzeResult) Print() {
+	fmt.Println("==================================================")
+	fmt.Print(result.Header)
+	for _, line := range result.Body {
+		fmt.Print(line)
+	}
+	fmt.Println("==================================================")
+}
+
+func (result AnalyzeResult) ToHTML() string {
+	var buf bytes.Buffer
+	buf.WriteString("<h1>" + result.Header + "</h1>")
+	buf.WriteString("<ul>")
+	for _, line := range result.Body {
+		buf.WriteString("<li>" + line + "</li>")
+	}
+	buf.WriteString("</ul>")
+	return buf.String()
+}
+
+func PrintSizeClasses(max int) (result AnalyzeResult) {
+	result = AnalyzeResult{
+		Header: fmt.Sprintf("\n\nTop %d classes by size\n", max),
+		Body:   make([]string, max),
 	}
 
-	pairs := make([]IdSize, 0, len(IDtoSizeClassDump))
-	for id, size := range IDtoSizeClassDump {
-		pairs = append(pairs, IdSize{id, size})
+	type ClassSizeInfo struct {
+		ClassID       ID     `gorm:"column:class_id"`
+		ClassName     string `gorm:"column:class_name"`
+		InstanceSize  int64  `gorm:"column:instance_size"`
+		InstancesSize int64  `gorm:"column:instances_size"`
+		TotalSize     int64  `gorm:"column:total_size"`
 	}
 
-	sort.Slice(pairs, func(i, j int) bool {
-		return pairs[i].size > pairs[j].size
-	})
+	// Один оптимизированный запрос для получения всех данных
+	var classSizeInfos []ClassSizeInfo
+	query := `
+		SELECT 
+			cd."ID" as class_id,
+			COALESCE(REPLACE(convert_from(s."Bytes", 'UTF8'), '/', '.'), 'Unknown class ' || cd."ID"::text) as class_name,
+			cd."InstanceSize" as instance_size,
+			COALESCE(SUM(id."NumberOfBytes"), 0) as instances_size,
+			cd."InstanceSize" + COALESCE(SUM(id."NumberOfBytes"), 0) as total_size
+		FROM "ClassDump" cd
+		LEFT JOIN "InstanceDump" id ON cd."ID" = id."ClassObjectID"
+		LEFT JOIN "LoadClass" lc ON cd."ID" = lc."ClassObjectID"
+		LEFT JOIN "StringInUTF8" s ON lc."ClassNameStringID" = s."StringID"
+		GROUP BY cd."ID", cd."InstanceSize", s."Bytes"
+		ORDER BY total_size DESC
+		LIMIT ?
+	`
 
-	for i, p := range pairs {
-		if i == max {
+	if err := GetDB().Raw(query, max).Scan(&classSizeInfos).Error; err != nil {
+		fmt.Printf("Error getting class size information: %v\n", err)
+		return result
+	}
+
+	// Заполняем результат
+	for i, info := range classSizeInfos {
+		if i >= max {
 			break
 		}
-		fmt.Printf("%d. Class ID: %d, Size: %d, Name: %s\n", (i + 1), p.id, p.size, IDtoStringInUTF8[ClassObjectIdToClassNameID[p.id]])
+		result.Body[i] = fmt.Sprintf("%d. Class ID: %d, Size: %d, Name: %s\n",
+			(i + 1), info.ClassID, info.TotalSize, info.ClassName)
 	}
+
+	return result
 }
 
-func printCountInstances(max int) {
-	fmt.Printf("\n\nTop %d classes by instance count\n", max)
-	type IdCount struct {
-		id    ID
-		count int32
+func PrintCountInstances(max int) (result AnalyzeResult) {
+	result = AnalyzeResult{
+		Header: fmt.Sprintf("\n\nTop %d classes by instance count\n", max),
+		Body:   make([]string, max),
 	}
 
-	countPairs := make([]IdCount, 0, len(ClassObjectIdToCountInstances))
-	for id, count := range ClassObjectIdToCountInstances {
-		countPairs = append(countPairs, IdCount{id, count})
+	type IdCount struct {
+		id    ID
+		count int64
+		name  string
+	}
+
+	// Получаем количество экземпляров для каждого класса из базы данных
+	var classInstanceCounts []struct {
+		ClassObjectID ID
+		Count         int64
+	}
+
+	if err := GetDB().Table("InstanceDump").
+		Select("\"ClassObjectID\", COUNT(*) as count").
+		Group("\"ClassObjectID\"").
+		Scan(&classInstanceCounts).Error; err != nil {
+		fmt.Printf("Error getting instance counts: %v\n", err)
+		return result
+	}
+
+	countPairs := make([]IdCount, 0, len(classInstanceCounts))
+	for _, record := range classInstanceCounts {
+		className := getClassNameFromDB(record.ClassObjectID)
+		countPairs = append(countPairs, IdCount{record.ClassObjectID, record.Count, className})
 	}
 
 	sort.Slice(countPairs, func(i, j int) bool {
@@ -910,37 +832,93 @@ func printCountInstances(max int) {
 		if i == max {
 			break
 		}
-		fmt.Printf("%d. Class ID: %d, Count: %d, Name: %s\n", (i + 1), p.id, p.count, IDtoStringInUTF8[ClassObjectIdToClassNameID[p.id]])
+		result.Body[i] = fmt.Sprintf("%d. Class ID: %d, Count: %d, Name: %s\n", (i + 1), p.id, p.count, p.name)
 	}
+	return result
 }
 
-func printObjectLoadersInfo(max int) {
-	loaderObjectsMap := make(map[ID]([]ID))
-	for object, loader := range IDtoClassLoaderID {
-		loaderObjectsMap[loader] = append(loaderObjectsMap[loader], object)
+func PrintObjectLoadersInfo(max int) (result AnalyzeResult) {
+	result = AnalyzeResult{
+		Header: "\n\nObject loaders info\n",
+		Body:   make([]string, 0),
 	}
 
-	fmt.Printf("\n\nObject loaders info\n")
-	for loader, classes := range loaderObjectsMap {
-		loaderName := getNameByClassObjectId(ObjectIdToInstanceDumpMap[loader].ClassObjectId)
-		if loader == 0 {
-			loaderName = "Bootstrap ClassLoader (System)"
+	type LoaderInfo struct {
+		LoaderID   ID     `gorm:"column:loader_id"`
+		LoaderName string `gorm:"column:loader_name"`
+		ClassCount int64  `gorm:"column:class_count"`
+	}
+
+	var loaderInfos []LoaderInfo
+	query := `
+		SELECT 
+			cd."ClassLoaderObjectID" as loader_id,
+			CASE 
+				WHEN cd."ClassLoaderObjectID" = 0 THEN 'Bootstrap ClassLoader (System)'
+				ELSE COALESCE(REPLACE(convert_from(s."Bytes", 'UTF8'), '/', '.'), 'Unknown loader ' || cd."ClassLoaderObjectID"::text)
+			END as loader_name,
+			COUNT(*) as class_count
+		FROM "ClassDump" cd
+		LEFT JOIN "InstanceDump" id ON cd."ClassLoaderObjectID" = id."ID"
+		LEFT JOIN "LoadClass" lc ON id."ClassObjectID" = lc."ClassObjectID"
+		LEFT JOIN "StringInUTF8" s ON lc."ClassNameStringID" = s."StringID"
+		GROUP BY cd."ClassLoaderObjectID", loader_name
+		ORDER BY class_count DESC
+	`
+
+	if err := GetDB().Raw(query).Scan(&loaderInfos).Error; err != nil {
+		fmt.Printf("Error getting loader info: %v\n", err)
+		return result
+	}
+
+	for _, loaderInfo := range loaderInfos {
+		result.Body = append(result.Body, fmt.Sprintf("Loader ID: %d, Name: %s, Number of classes: %d\n",
+			loaderInfo.LoaderID, loaderInfo.LoaderName, loaderInfo.ClassCount))
+
+		type ClassInfo struct {
+			ClassID   ID     `gorm:"column:class_id"`
+			ClassName string `gorm:"column:class_name"`
 		}
-		fmt.Printf("Loader ID: %d, Name: %s, Number of objects: %d\n", loader, loaderName, len(classes))
-		for i, obj := range classes {
+
+		var classInfos []ClassInfo
+		classQuery := `
+			SELECT 
+				cd."ID" as class_id,
+				COALESCE(REPLACE(convert_from(s."Bytes", 'UTF8'), '/', '.'), 'Unknown class ' || cd."ID"::text) as class_name
+			FROM "ClassDump" cd
+			LEFT JOIN "LoadClass" lc ON cd."ID" = lc."ClassObjectID"
+			LEFT JOIN "StringInUTF8" s ON lc."ClassNameStringID" = s."StringID"
+			WHERE cd."ClassLoaderObjectID" = ?
+			LIMIT ?
+		`
+
+		if err := GetDB().Raw(classQuery, loaderInfo.LoaderID, max).Scan(&classInfos).Error; err != nil {
+			fmt.Printf("Error getting classes for loader %d: %v\n", loaderInfo.LoaderID, err)
+			continue
+		}
+
+		for i, classInfo := range classInfos {
 			if i == max {
-				fmt.Printf("\t\t...\n")
+				result.Body = append(result.Body, "\t\t...\n")
 				break
 			}
-			fmt.Printf("\t\tClass ID: %d, Name: %s\n", obj, getNameByClassObjectId(obj))
+			result.Body = append(result.Body, fmt.Sprintf("\t\tClass ID: %d, Name: %s\n", classInfo.ClassID, classInfo.ClassName))
+		}
+
+		if len(classInfos) == max && loaderInfo.ClassCount > int64(max) {
+			result.Body = append(result.Body, "\t\t...\n")
 		}
 	}
+	return result
 }
 
-func printFullClassSize(max int) {
-	classStatsMap := CalculateClassSizes()
+func PrintFullClassSize(max int) (result AnalyzeResult) {
+	result = AnalyzeResult{
+		Header: fmt.Sprintf("\n\nTop %d classes by full size (with all depends object)\n", max),
+		Body:   make([]string, max),
+	}
 
-	fmt.Printf("\n\nTop %d classes by full size (with all depends object)\n", max)
+	classStatsMap := CalculateClassSizesFromDB()
 
 	type IdStats struct {
 		id   ID
@@ -960,48 +938,97 @@ func printFullClassSize(max int) {
 		if i == max {
 			break
 		}
-		fmt.Printf("%d. Class ID: %d, Size: %d, Name: %s\n", (i + 1), p.id, p.stat.TotalSize, p.stat.ClassName)
+		result.Body[i] = fmt.Sprintf("%d. Class ID: %d, Size: %d, Name: %s\n", (i + 1), p.id, p.stat.TotalSize, p.stat.ClassName)
 	}
+	return result
 }
 
-func printArrayInfo(max int) {
-	type nameSize struct {
-		name string
-		size int32
+func PrintArrayInfo(max int) (result AnalyzeResult) {
+	result = AnalyzeResult{
+		Header: fmt.Sprintf("\n\nTop %d arrays by size\n", max),
+		Body:   make([]string, max),
 	}
 
-	nameSizeMap := make(map[string]int32)
-
-	for _, array := range ObjectIdToObjectArrayDumpMap {
-		name := getNameByClassObjectId(array.ArrayClassObjectId)
-		nameSizeMap[string(name)] += getObjectSize(array)
+	type ArraySizeInfo struct {
+		ArrayType string `gorm:"column:array_type"`
+		TotalSize int64  `gorm:"column:total_size"`
 	}
 
-	for _, array := range ObjectIdToPrimitiveArrayDumpMap {
-		name := array.ElementType.GetName()
-		nameSizeMap[string(name)] += getObjectSize(array)
+	var arraySizeInfos []ArraySizeInfo
+
+	objectArrayQuery := `
+		SELECT 
+			COALESCE(REPLACE(convert_from(s."Bytes", 'UTF8'), '/', '.'), 'Unknown class ' || oad."ArrayClassObjectID"::text) || '[]' as array_type,
+			SUM(? + oad."NumberOfElements" * 8) as total_size
+		FROM "ObjectArrayDump" oad
+		LEFT JOIN "LoadClass" lc ON oad."ArrayClassObjectID" = lc."ClassObjectID"
+		LEFT JOIN "StringInUTF8" s ON lc."ClassNameStringID" = s."StringID"
+		GROUP BY oad."ArrayClassObjectID", s."Bytes"
+		ORDER BY total_size DESC
+	`
+
+	var objectArrayResults []ArraySizeInfo
+	if err := GetDB().Raw(objectArrayQuery, ArrayHeaderSize).Scan(&objectArrayResults).Error; err != nil {
+		fmt.Printf("Error getting ObjectArrayDump size info: %v\n", err)
+	} else {
+		arraySizeInfos = append(arraySizeInfos, objectArrayResults...)
 	}
 
-	pairs := make([]nameSize, 0, len(nameSizeMap))
-	for name, size := range nameSizeMap {
-		pairs = append(pairs, nameSize{name, size})
+	primitiveArrayQuery := `
+		SELECT 
+			CASE pad."Type"
+				WHEN 2 THEN 'object[]'
+				WHEN 4 THEN 'bool[]'
+				WHEN 5 THEN 'char[]'
+				WHEN 6 THEN 'float[]'
+				WHEN 7 THEN 'double[]'
+				WHEN 8 THEN 'byte[]'
+				WHEN 9 THEN 'short[]'
+				WHEN 10 THEN 'int[]'
+				WHEN 11 THEN 'long[]'
+				ELSE 'unknown[]'
+			END as array_type,
+			SUM(
+				? + pad."NumberOfElements" * 
+				CASE pad."Type"
+					WHEN 4 THEN 1    -- bool: 1 byte
+					WHEN 8 THEN 1    -- byte: 1 byte
+					WHEN 5 THEN 2    -- char: 2 bytes
+					WHEN 9 THEN 2    -- short: 2 bytes
+					WHEN 6 THEN 4    -- float: 4 bytes
+					WHEN 10 THEN 4   -- int: 4 bytes
+					WHEN 2 THEN 8    -- object: 8 bytes
+					WHEN 7 THEN 8    -- double: 8 bytes
+					WHEN 11 THEN 8   -- long: 8 bytes
+					ELSE 0
+				END
+			) as total_size
+		FROM "PrimitiveArrayDump" pad
+		GROUP BY pad."Type"
+		ORDER BY total_size DESC
+	`
+
+	var primitiveArrayResults []ArraySizeInfo
+	if err := GetDB().Raw(primitiveArrayQuery, ArrayHeaderSize).Scan(&primitiveArrayResults).Error; err != nil {
+		fmt.Printf("Error getting PrimitiveArrayDump size info: %v\n", err)
+	} else {
+		arraySizeInfos = append(arraySizeInfos, primitiveArrayResults...)
 	}
 
-	sort.Slice(pairs, func(i, j int) bool {
-		return pairs[i].size > pairs[j].size
+	// Сортируем все результаты по размеру
+	sort.Slice(arraySizeInfos, func(i, j int) bool {
+		return arraySizeInfos[i].TotalSize > arraySizeInfos[j].TotalSize
 	})
 
-	fmt.Printf("\n\nTop %d arrays by size\n", max)
-	for i, p := range pairs {
-		if i == max {
+	// Заполняем результат
+	for i, info := range arraySizeInfos {
+		if i >= max {
 			break
 		}
-		fmt.Printf("%d. Array: %s, Size: %d\n", (i + 1), p.name, p.size)
+		result.Body[i] = fmt.Sprintf("%d. Array: %s, Size: %d\n", (i + 1), info.ArrayType, info.TotalSize)
 	}
-}
 
-func getNameByClassObjectId(id ID) string {
-	return IDtoStringInUTF8[ClassObjectIdToClassNameID[id]]
+	return result
 }
 
 type ClassStats struct {
@@ -1009,38 +1036,55 @@ type ClassStats struct {
 	TotalSize int32
 }
 
-func CalculateClassSizes() map[ID]ClassStats {
+func CalculateClassSizesFromDB() map[ID]ClassStats {
 	result := make(map[ID]ClassStats)
 
-	for classObjectId, classDump := range ClassObjectIdToClassDumpMap {
-		visited := make(map[ID]bool)
-		queue := make([]ID, 0)
-		var totalSize int32
+	// Получаем все классы из базы данных
+	var classes []ClassDump
+	if err := GetDB().Find(&classes).Error; err != nil {
+		fmt.Printf("Error getting classes from database: %v\n", err)
+		return result
+	}
 
-		for objId, instance := range ObjectIdToInstanceDumpMap {
-			if instance.ClassObjectId == classObjectId {
-				if visited[objId] {
-					continue
-				}
-				visited[objId] = true
-				queue = append(queue, objId)
-				totalSize += getObjectSize(instance)
+	fmt.Printf("Processing %d classes for full size calculation...\n", len(classes))
+
+	for i, classDump := range classes {
+		if i%100 == 0 {
+			fmt.Printf("Processing class %d/%d\n", i+1, len(classes))
+		}
+
+		visited := make(map[ID]bool)
+		var totalSize int64
+
+		// Получаем имя класса
+		className := getClassNameFromDB(classDump.ID)
+
+		// 1. Добавляем размер самого класса (статические поля)
+		classSize := calculateClassSizeFromDB(classDump.ID)
+		totalSize += classSize
+
+		// 2. Получаем все экземпляры данного класса
+		instanceIds := getInstanceIdsForClassFromDB(classDump.ID)
+
+		// 3. Для каждого экземпляра проходим граф ссылок в ширину
+		queue := make([]ID, 0)
+
+		for _, instanceId := range instanceIds {
+			if !visited[instanceId] {
+				visited[instanceId] = true
+				queue = append(queue, instanceId)
+				size := getObjectSizeFromDB(instanceId)
+				totalSize += size
 			}
 		}
 
-		for _, sf := range classDump.StaticFields {
-			if sf.Type == Object {
-				refId := ID(binary.BigEndian.Uint64(sf.Value))
-				if visited[refId] {
-					continue
-				}
+		staticRefs := getStaticFieldReferencesFromDB(classDump.ID)
+		for _, refId := range staticRefs {
+			if refId != 0 && !visited[refId] {
 				visited[refId] = true
 				queue = append(queue, refId)
-				if obj := getObject(refId); obj != nil {
-					totalSize += getObjectSize(obj)
-				}
-			} else {
-				totalSize += sf.Type.GetSize()
+				size := getObjectSizeFromDB(refId)
+				totalSize += size
 			}
 		}
 
@@ -1048,98 +1092,184 @@ func CalculateClassSizes() map[ID]ClassStats {
 			currentId := queue[0]
 			queue = queue[1:]
 
-			obj := getObject(currentId)
-			if obj == nil {
-				continue
-			}
-
-			for _, refId := range getReferences(obj) {
-				if visited[refId] {
-					continue
-				}
-				visited[refId] = true
-				queue = append(queue, refId)
-				if refObj := getObject(refId); refObj != nil {
-					totalSize += getObjectSize(refObj)
+			refs := getObjectReferencesFromDB(currentId)
+			for _, refId := range refs {
+				if refId != 0 && !visited[refId] {
+					visited[refId] = true
+					queue = append(queue, refId)
+					size := getObjectSizeFromDB(refId)
+					totalSize += size
 				}
 			}
 		}
 
-		className := getNameByClassObjectId(classObjectId)
-
-		result[classObjectId] = ClassStats{
+		result[classDump.ID] = ClassStats{
 			ClassName: className,
-			TotalSize: totalSize,
+			TotalSize: int32(totalSize),
 		}
 	}
 
 	return result
 }
 
-func getObject(objectId ID) interface{} {
-	if obj, ok := ObjectIdToInstanceDumpMap[objectId]; ok {
-		return obj
+func getClassNameFromDB(classID ID) string {
+	// Получаем LoadClass запись для данного класса
+	var loadClass LoadClass
+	if err := GetDB().Where("\"ClassObjectID\" = ?", classID).First(&loadClass).Error; err != nil {
+		fmt.Printf("Error getting LoadClass for class %d: %v\n", classID, err)
+		return fmt.Sprintf("Unknown class %d", classID)
 	}
-	if obj, ok := ObjectIdToObjectArrayDumpMap[objectId]; ok {
-		return obj
+
+	// Получаем строку с именем класса
+	var stringData StringInUTF8
+	if err := GetDB().Where("\"StringID\" = ?", loadClass.ClassNameStringID).First(&stringData).Error; err != nil {
+		fmt.Printf("Error getting class name string for class %d: %v\n", classID, err)
+		return fmt.Sprintf("Unknown class %d", classID)
 	}
-	if obj, ok := ObjectIdToPrimitiveArrayDumpMap[objectId]; ok {
-		return obj
-	}
-	return nil
+
+	className := string(stringData.Bytes)
+	className = strings.ReplaceAll(className, "/", ".")
+
+	return className
 }
 
-func getReferences(obj interface{}) []ID {
-	switch v := obj.(type) {
-	case InstanceDump:
-		return parseInstanceReferences(v)
-	case ObjectArrayDump:
-		return v.Elements
+func calculateClassSizeFromDB(classID ID) int64 {
+	var totalSize int64
+
+	var staticFields []StaticFieldRecord
+	if err := GetDB().Where("\"ClassDumpID\" = ?", classID).Find(&staticFields).Error; err != nil {
+		fmt.Printf("Error getting static fields for class %d: %v\n", classID, err)
+		return 0
 	}
-	return nil
+
+	for _, sf := range staticFields {
+		totalSize += int64(sf.Type.GetSize())
+	}
+
+	return totalSize
 }
 
-func parseInstanceReferences(instance InstanceDump) []ID {
-	currentClassId := instance.ClassObjectId
-	var allFields []InstanceFieldRecord
+func getInstanceIdsForClassFromDB(classID ID) []ID {
+	var instanceIds []ID
+	if err := GetDB().Table("InstanceDump").
+		Where("\"ClassObjectID\" = ?", classID).
+		Pluck("\"ID\"", &instanceIds).Error; err != nil {
+		fmt.Printf("Error getting instance IDs for class %d: %v\n", classID, err)
+		return nil
+	}
+	return instanceIds
+}
 
-	for {
-		classDump, ok := ClassObjectIdToClassDumpMap[currentClassId]
-		if !ok {
-			break
-		}
-		allFields = append(classDump.InstanceFields, allFields...)
-		currentClassId = classDump.SuperClassObjectId
-		if currentClassId == 0 {
-			break
-		}
+func getObjectSizeFromDB(objectID ID) int64 {
+	var instance InstanceDump
+	if err := GetDB().Where("\"ID\" = ?", objectID).First(&instance).Error; err == nil {
+		return int64(instance.NumberOfBytes)
 	}
 
+	var objectArray ObjectArrayDump
+	if err := GetDB().Where("\"ID\" = ?", objectID).First(&objectArray).Error; err == nil {
+		return int64(ArrayHeaderSize + objectArray.NumberOfElements*8)
+	}
+
+	var primitiveArray PrimitiveArrayDump
+	if err := GetDB().Where("\"ID\" = ?", objectID).First(&primitiveArray).Error; err == nil {
+		return int64(ArrayHeaderSize + primitiveArray.NumberOfElements*primitiveArray.Type.GetSize())
+	}
+
+	return 0
+}
+
+func getStaticFieldReferencesFromDB(classID ID) []ID {
 	var refs []ID
+
+	var staticFields []StaticFieldRecord
+	if err := GetDB().Where("\"ClassDumpID\" = ? AND \"Type\" = ?", classID, Object).Find(&staticFields).Error; err != nil {
+		fmt.Printf("Error getting static field references for class %d: %v\n", classID, err)
+		return nil
+	}
+
+	for _, sf := range staticFields {
+		if len(sf.Value) >= 8 {
+			refId := ID(binary.BigEndian.Uint64(sf.Value))
+			if refId != 0 {
+				refs = append(refs, refId)
+			}
+		}
+	}
+
+	return refs
+}
+
+func getObjectReferencesFromDB(objectID ID) []ID {
+	var refs []ID
+
+	// Проверяем InstanceDump
+	var instance InstanceDump
+	if err := GetDB().Where("\"ID\" = ?", objectID).First(&instance).Error; err == nil {
+		return parseInstanceReferencesFromDB(instance)
+	}
+
+	// Проверяем ObjectArrayDump - получаем элементы массива
+	var elements []ObjectArrayElement
+	if err := GetDB().Where("\"ObjectArrayDumpID\" = ?", objectID).Find(&elements).Error; err == nil {
+		for _, element := range elements {
+			if element.InstanceDumpID != 0 {
+				refs = append(refs, element.InstanceDumpID)
+			}
+		}
+		return refs
+	}
+
+	// PrimitiveArrayDump не содержит ссылок
+	return nil
+}
+
+func parseInstanceReferencesFromDB(instance InstanceDump) []ID {
+	var refs []ID
+
+	// Получаем все поля экземпляра для данного класса и его суперклассов
+	allFields := getAllInstanceFieldsFromDB(instance.ClassObjectID)
+
+	// Парсим данные экземпляра
 	offset := 0
 	for _, field := range allFields {
 		if field.Type == Object {
 			start := offset
 			end := offset + 8
-			if end > len(instance.InstanceFieldValues) {
-				break
+			if end <= len(instance.Data) {
+				refId := ID(binary.BigEndian.Uint64(instance.Data[start:end]))
+				if refId != 0 {
+					refs = append(refs, refId)
+				}
 			}
-			refId := ID(binary.BigEndian.Uint64(instance.InstanceFieldValues[start:end]))
-			refs = append(refs, refId)
 		}
 		offset += int(field.Type.GetSize())
 	}
+
 	return refs
 }
 
-func getObjectSize(obj interface{}) int32 {
-	switch v := obj.(type) {
-	case InstanceDump:
-		return v.NumberOfBytes
-	case ObjectArrayDump:
-		return ArrayHeaderSize + v.NumberOfElements*8
-	case PrimitiveArrayDump:
-		return ArrayHeaderSize + v.NumberOfElements*v.ElementType.GetSize()
+func getAllInstanceFieldsFromDB(classID ID) []InstanceFieldRecord {
+	var allFields []InstanceFieldRecord
+	currentClassID := classID
+
+	for currentClassID != 0 {
+		var fields []InstanceFieldRecord
+		if err := GetDB().Where("\"ClassDumpID\" = ?", currentClassID).Find(&fields).Error; err != nil {
+			fmt.Printf("Error getting instance fields for class %d: %v\n", currentClassID, err)
+			break
+		}
+
+		// Добавляем поля в начало, так как нужно сохранить порядок наследования
+		allFields = append(fields, allFields...)
+
+		// Получаем суперкласс
+		var classDump ClassDump
+		if err := GetDB().Where("\"ID\" = ?", currentClassID).First(&classDump).Error; err != nil {
+			break
+		}
+		currentClassID = classDump.SuperClassObjectID
 	}
-	return 0
+
+	return allFields
 }

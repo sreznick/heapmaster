@@ -1,0 +1,251 @@
+@startuml
+
+
+entity StringInUTF8 {
+  * StringID (pk)
+  Bytes
+}
+
+entity LoadClass {
+  * ID (pk)
+  --
+  ClassSerialNumber
+  + ClassObjectID (fk)
+  + StackTraceSerialNumber (fk)
+  + ClassNameStringID (fk)
+}
+
+entity UnloadClass {
+  * ID (pk)
+  --
+  ClassSerialNumber
+}
+
+entity StackFrame {
+  * ID (pk)
+  --
+  + MethodNameStringID (fk)
+  + MethodSignatureStringID (fk)
+  + SourceFileNameStringID (fk)
+  ClassSerialNumber
+  Flag
+  --
+  + StackTraceSerialNumber (fk)
+}
+
+entity StackTrace {
+  * StackTraceSerialNumber (pk)
+  --
+  ThreadSerialNumber
+}
+
+entity AllocSites {
+  * ID (pk)
+  --
+  BitMaskSize
+  CutoffRatio
+  TotalLiveBytes
+  TotalLiveInstances
+  TotalBytesAllocated
+  TotalInstanceAllocated
+}
+
+entity Site {
+  * ID (pk)
+  --
+  + AllocSitesID (fk)
+  ArrayIndicator
+  ClassSerialNumber
+  + StackTraceSerialNumber (fk)
+  NumberOfLiveBytes
+  NumberOfLiveInstances
+  NumberOfBytesAllocated
+  NumberOfInstancesAllocated
+}
+
+' Heap Dump Segment
+
+entity RootUnknown {
+  * ID (pk)
+}
+
+entity RootJNIGlobal {
+  * ID (pk)
+  --
+  JNIGlobalRef
+}
+
+entity RootJNILocal {
+  * ID (pk)
+  --
+  ThreadSerialNumber
+  FrameNumberInStackTrace
+}
+
+entity RootJavaFrame {
+  * ID (pk)
+  --
+  ThreadSerialNumber
+  FrameNumberInStackTrace
+}
+
+entity RootNativaStack {
+  * ID (pk)
+  --
+  ThreadSerialNumber
+}
+
+entity RootStickyClass {
+  * ID (pk)
+}
+
+entity RootThreadBlock {
+  * ID (pk)
+  --
+  ThreadSerialNumber
+}
+
+entity RootMonitorUsed {
+  * ID (pk)
+}
+
+entity RootThreadObject {
+  * ID (pk)
+  --
+  ThreadSerialNumber
+  + StackTraceSerialNumber (fk)
+}
+
+entity ClassDump {
+  * ID (pk)
+  --
+  + StackTraceSerialNumber (fk)
+  + SuperClassObjectID (fk)
+  + ClassLoaderObjectID (fk)
+  SignersObjectID 
+  ProtectionDomainObjectID 
+  Reserved1
+  Reserved2
+  InstanceSize
+}
+
+entity ConstantPoolRecord {
+  * ID (pk)
+  --
+  + ClassDumpID (fk)
+  ConstantPoolIndex
+  Type
+  Value
+}
+
+entity StaticFieldRecord {
+  * ID (pk)
+  --
+  + ClassDumpID (fk)
+  + StaticFieldNameStringID (fk)
+  Type
+  Value
+}
+
+entity InstanceFieldRecord {
+  * ID (pk)
+  --
+  + ClassDumpID (fk)
+  + FieldNameStringID (fk)
+  Type
+}
+
+
+entity InstanceDump {
+  * ID (pk)
+  --
+  + StackTraceSerialNumber (fk)
+  + ClassObjectID (fk)
+}
+
+' Все значения всех полей из экземпляров класса
+entity InstanceFieldValues {
+  * ID (pk)
+  --
+  + InstanceDumpID (fk)
+  Type
+  Value
+}
+
+entity ObjectArrayDump {
+  * ID (pk)
+  --
+  + StackTraceSerialNumber (fk)
+  NumberOfElements
+  + ArrayClassObjectID (fk)
+}
+
+entity ObjectArrayElement {
+  * ID (pk)
+  --
+  + ObjectArrayDumpID (fk)
+  Index
+  + InstanceDumpID (fk)
+}
+
+entity PrimitiveArrayDump {
+  * ID (pk)
+  --
+  + StackTraceSerialNumber (fk)
+  NumberOfElements
+  Type
+}
+
+entity PrimitiveArrayElement {
+  * ID (pk)
+  --
+  + PrimitiveArrayDumpID (fk)
+  Index
+  Value
+}
+
+' Связи
+LoadClass }o--|| StringInUTF8: ClassNameStringID
+LoadClass }o--|| StackTrace : StackTraceSerialNumber
+LoadClass }o--|| ClassDump : ClassObjectID
+
+
+StackFrame }o--|| StringInUTF8 : MethodNameStringID
+StackFrame }o--|| StringInUTF8 : SourceFileNameStringID
+StackFrame }o--|| StringInUTF8 : MethodSignatureStringID
+StackFrame }o--|| StackTrace : StackTraceSerialNumber
+
+Site }o--|| AllocSites : AllocSitesID
+Site }o--|| StackTrace : StackTraceSerialNumber
+
+RootThreadBlock }o--|| StackTrace : StackTraceSerialNumber
+
+ClassDump }o--|| StackTrace : StackTraceSerialNumber
+ClassDump }o--|| ClassDump : SuperClassObjectID
+ClassDump }o--|| ClassDump : ClassLoaderObjectID
+
+ConstantPoolRecord }o--|| ClassDump : ClassDumpID
+
+StaticFieldRecord }o--|| ClassDump : ClassDumpID
+StaticFieldRecord }o--|| StringInUTF8 : StaticFieldNameStringID
+
+InstanceFieldRecord }o--|| ClassDump : ClassDumpID
+InstanceFieldRecord }o--|| StringInUTF8 : FieldNameStringID
+
+InstanceDump }o--|| StackTrace : StackTraceSerialNumber
+InstanceDump }o--|| ClassDump : ClassObjectID
+
+InstanceFieldValues }o--|| InstanceDump : InstanceDumpID
+
+ObjectArrayDump }o--|| StackTrace : StackTraceSerialNumber
+ObjectArrayDump }o--|| ClassDump : ArrayClassObjectID
+
+ObjectArrayElement }o--|| ObjectArrayDump : ObjectArrayDumpID
+ObjectArrayElement }o--|| InstanceDump : InstanceDumpID
+
+PrimitiveArrayDump }o--|| StackTrace : StackTraceSerialNumber
+
+PrimitiveArrayElement }o--|| PrimitiveArrayDump : PrimitiveArrayDumpID
+
+
+@enduml

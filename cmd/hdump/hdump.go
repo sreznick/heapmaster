@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/sreznick/heapmaster/cmd/hdump/cmd"
+	"github.com/sreznick/heapmaster/internal/hprof"
 )
 
 func main() {
@@ -40,4 +42,13 @@ func main() {
 			}
 		}
 	*/
+	args := os.Args[1:]
+	fmt.Println(args)
+
+	if err := hprof.InitDB(); err != nil {
+		fmt.Printf("Failed to initialize database: %v\n", err)
+		os.Exit(1)
+	}
+
+	cmd.Execute()
 }
